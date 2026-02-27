@@ -1,0 +1,9 @@
+dependencies:
+  lvgl/lvgl:
+    version: "~9.2"
+  espressif/esp_lvgl_port:
+    version: "^2"
+  espressif/led_strip:
+    version: "^2"
+  espressif/esp_websocket_client:
+    version: "^1.2"
