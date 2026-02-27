@@ -18,7 +18,7 @@ void ui_boot_show(const char *msg, int progress_pct);
 void ui_boot_hide(void);
 
 /**
- * Update price data for a crypto item (HTTP polling path).
+ * Update price data for a crypto item.
  * idx: 0=BTC, 1=ETH, 2=PAXG
  * Thread-safe (acquires LVGL lock internally).
  */
@@ -26,12 +26,11 @@ void ui_update_price(int idx, double price, double change_pct,
                      double high_24h, double low_24h);
 
 /**
- * Update price from WebSocket real-time feed.
- * Only applies when idx == current focus. Includes latency display.
- * Thread-safe (acquires LVGL lock internally).
+ * Pre-fill chart history with candlestick close prices.
+ * prices[] should be in chronological order (oldest first).
+ * Called during boot before ui_init().
  */
-void ui_update_price_ws(int idx, double price, double change_pct,
-                        double high_24h, double low_24h, int latency_ms);
+void ui_set_chart_history(int idx, const double *prices, int count);
 
 /**
  * Create the TokenTicker UI using LVGL.

@@ -23,7 +23,8 @@
 #define SIDE_H      ((CONTENT_H - GAP) / 2)           // 80
 #define SIDE_X      (MARGIN_H + MAIN_W + GAP)          // 210
 #define CHART_H     80
-#define CHART_POINTS 30
+#define CHART_POINTS      48
+#define CHART_INTERVAL_MS (30 * 60 * 1000)   // 30 min between chart samples
 
 #define CRYPTO_COUNT 3
 

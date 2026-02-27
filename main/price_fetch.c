@@ -5,7 +5,7 @@
 
 #include "price_fetch.h"
 #include "ui.h"
-#include "ws_price.h"
+#include "ui_internal.h"
 
 #include "esp_http_client.h"
 #include "esp_tls.h"
@@ -20,7 +20,8 @@
 
 static const char *TAG = "price_fetch";
 
-#define MAX_RESP_LEN 1024
+#define MAX_RESP_LEN      1024
+#define MAX_HIST_RESP_LEN 8192
 
 static const char *s_pairs[] = {
     "BTC_USDT",
@@ -127,9 +128,6 @@ static void price_fetch_task(void *arg)
 
     while (1) {
         for (int i = 0; i < PAIR_COUNT; i++) {
-            // Skip coin currently covered by WebSocket
-            if (i == ws_price_get_active_idx()) continue;
-
             char url[128];
             snprintf(url, sizeof(url),
                      "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=%s",
@@ -164,6 +162,108 @@ static void price_fetch_task(void *arg)
         }
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
+}
+
+// ── Heap-allocated response buffer for large responses ───────────────
+typedef struct {
+    char *buf;
+    int   len;
+    int   cap;
+} heap_resp_t;
+
+static esp_err_t heap_event_handler(esp_http_client_event_t *evt)
+{
+    heap_resp_t *resp = (heap_resp_t *)evt->user_data;
+
+    switch (evt->event_id) {
+    case HTTP_EVENT_ON_DATA:
+        if (resp->len + evt->data_len < resp->cap) {
+            memcpy(resp->buf + resp->len, evt->data, evt->data_len);
+            resp->len += evt->data_len;
+        }
+        break;
+    default:
+        break;
+    }
+    return ESP_OK;
+}
+
+// ── Fetch 24h candlestick history to pre-fill charts ─────────────────
+void price_fetch_history(void)
+{
+    char *buf = malloc(MAX_HIST_RESP_LEN);
+    if (!buf) {
+        ESP_LOGE(TAG, "Failed to allocate history buffer");
+        return;
+    }
+
+    heap_resp_t resp = { .buf = buf, .len = 0, .cap = MAX_HIST_RESP_LEN };
+
+    esp_http_client_config_t cfg = {
+        .url               = "https://api.gateio.ws/api/v4/spot/candlesticks",
+        .event_handler     = heap_event_handler,
+        .user_data         = &resp,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms        = 10000,
+        .keep_alive_enable = true,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE(TAG, "HTTP client init failed for history");
+        free(buf);
+        return;
+    }
+
+    for (int i = 0; i < PAIR_COUNT; i++) {
+        char url[160];
+        snprintf(url, sizeof(url),
+                 "https://api.gateio.ws/api/v4/spot/candlesticks"
+                 "?currency_pair=%s&interval=30m&limit=%d",
+                 s_pairs[i], CHART_POINTS);
+
+        esp_http_client_set_url(client, url);
+        resp.len = 0;
+
+        esp_err_t err = esp_http_client_perform(client);
+        int status = esp_http_client_get_status_code(client);
+
+        if (err != ESP_OK || status != 200) {
+            ESP_LOGE(TAG, "History fetch failed for %s: err=%s status=%d",
+                     s_pairs[i], esp_err_to_name(err), status);
+            continue;
+        }
+
+        resp.buf[resp.len] = '\0';
+
+        // Parse candlestick array: [[ts, vol, close, high, low, open, base_vol, closed], ...]
+        cJSON *root = cJSON_Parse(resp.buf);
+        if (!root || !cJSON_IsArray(root)) {
+            ESP_LOGE(TAG, "History JSON parse failed for %s", s_pairs[i]);
+            cJSON_Delete(root);
+            continue;
+        }
+
+        int n = cJSON_GetArraySize(root);
+        if (n > CHART_POINTS) n = CHART_POINTS;
+
+        double prices[CHART_POINTS];
+        for (int j = 0; j < n; j++) {
+            cJSON *candle = cJSON_GetArrayItem(root, j);
+            if (candle && cJSON_IsArray(candle)) {
+                cJSON *close = cJSON_GetArrayItem(candle, 2);  // close price
+                prices[j] = close ? atof(cJSON_GetStringValue(close)) : 0;
+            }
+        }
+
+        ui_set_chart_history(i, prices, n);
+        ESP_LOGI(TAG, "History loaded for %s: %d candles", s_pairs[i], n);
+
+        cJSON_Delete(root);
+    }
+
+    esp_http_client_cleanup(client);
+    free(buf);
+    ESP_LOGI(TAG, "Chart history pre-fill completed");
 }
 
 void price_fetch_first(void)

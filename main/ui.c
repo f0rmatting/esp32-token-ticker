@@ -6,7 +6,6 @@
 #include "ui.h"
 #include "ui_internal.h"
 #include "led.h"
-#include "ws_price.h"
 #include "crypto_logos.h"
 
 #include "freertos/FreeRTOS.h"
@@ -42,10 +41,7 @@ static lv_timer_t *s_flash_timer;
 // Price scroll animation
 static int32_t s_price_scale = 100;
 
-// WS latency label on main card
-static lv_obj_t *s_main_latency;
-
-// Chart throttle: only add a point every 10s per coin
+// Chart throttle: record one point per CHART_INTERVAL_MS
 static int64_t s_last_chart_time[CRYPTO_COUNT];
 
 // ── Main card widgets ──────────────────────────────────────────────
@@ -453,11 +449,6 @@ static void create_main_card(lv_obj_t *parent)
     lv_chart_set_div_line_count(s_chart, 0, 0);
     s_chart_ser = NULL;
 
-    s_main_latency = lv_label_create(s_main_card);
-    lv_label_set_text(s_main_latency, "");
-    lv_obj_set_style_text_color(s_main_latency, lv_color_hex(0x666666), 0);
-    lv_obj_set_style_text_font(s_main_latency, &lv_font_montserrat_10, 0);
-    lv_obj_align(s_main_latency, LV_ALIGN_TOP_RIGHT, 0, 0);
 }
 
 static void create_side_cards(lv_obj_t *parent)
@@ -499,6 +490,28 @@ static void create_side_cards(lv_obj_t *parent)
     }
 }
 
+// ── Pre-fill chart history from candlestick data ────────────────────
+void ui_set_chart_history(int idx, const double *prices, int count)
+{
+    if (idx < 0 || idx >= CRYPTO_COUNT) return;
+    if (count <= 0) return;
+    if (count > CHART_POINTS) count = CHART_POINTS;
+
+    // Fill from the right side of hist_raw (newest at end)
+    int start = CHART_POINTS - count;
+    for (int i = 0; i < count; i++) {
+        g_crypto[idx].hist_raw[start + i] = prices[i];
+    }
+    s_history_count[idx] = count;
+
+    // Set last chart time to now so next sample is 30 min later
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    s_last_chart_time[idx] = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+
+    ESP_LOGI(TAG, "Chart history loaded for idx=%d: %d points", idx, count);
+}
+
 // ── Live price update (called from price_fetch task) ───────────────
 void ui_update_price(int idx, double price, double change_pct,
                      double high_24h, double low_24h)
@@ -513,14 +526,20 @@ void ui_update_price(int idx, double price, double change_pct,
     g_crypto[idx].high_24h = high_24h;
     g_crypto[idx].low_24h = low_24h;
 
-    // Shift raw price history left, append new price (full double precision)
-    for (int i = 0; i < CHART_POINTS - 1; i++) {
-        g_crypto[idx].hist_raw[i] = g_crypto[idx].hist_raw[i + 1];
-    }
-    g_crypto[idx].hist_raw[CHART_POINTS - 1] = price;
-
-    if (s_history_count[idx] < CHART_POINTS) {
-        s_history_count[idx]++;
+    // Chart: throttle to one point per CHART_INTERVAL_MS (30 min)
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    bool add_chart = (now_ms - s_last_chart_time[idx] >= CHART_INTERVAL_MS);
+    if (add_chart) {
+        for (int i = 0; i < CHART_POINTS - 1; i++) {
+            g_crypto[idx].hist_raw[i] = g_crypto[idx].hist_raw[i + 1];
+        }
+        g_crypto[idx].hist_raw[CHART_POINTS - 1] = price;
+        if (s_history_count[idx] < CHART_POINTS) {
+            s_history_count[idx]++;
+        }
+        s_last_chart_time[idx] = now_ms;
     }
     s_price_loaded[idx] = true;
 
@@ -546,13 +565,10 @@ void ui_update_price(int idx, double price, double change_pct,
         update_side_cards();
 
         if (idx == s_focus_idx) {
-            chart_add_point(idx);
-            flash_price(old_price, price);
-
-            // Clear WS latency label when HTTP updates the focus coin
-            if (s_main_latency) {
-                lv_label_set_text(s_main_latency, "");
+            if (add_chart) {
+                chart_add_point(idx);
             }
+            flash_price(old_price, price);
 
             s_price_scale = (price < 1.0) ? 100000 : 100;
             int32_t old_val = (int32_t)(old_price * s_price_scale);
@@ -579,99 +595,6 @@ void ui_update_price(int idx, double price, double change_pct,
             if (old_price > 0 && price != old_price) {
                 led_flash_price(price > old_price);
             }
-        }
-    }
-}
-
-// ── WebSocket real-time price update ───────────────────────────────
-void ui_update_price_ws(int idx, double price, double change_pct,
-                        double high_24h, double low_24h, int latency_ms)
-{
-    if (s_ui_teardown) return;
-    if (idx < 0 || idx >= CRYPTO_COUNT) return;
-    if (idx != s_focus_idx) return;  // WS only updates the focused coin
-
-    double old_price = g_crypto[idx].price;
-
-    g_crypto[idx].price      = price;
-    g_crypto[idx].change_pct = change_pct;
-    g_crypto[idx].high_24h   = high_24h;
-    g_crypto[idx].low_24h    = low_24h;
-
-    // Chart: throttle to one point per 10s
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    int64_t now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
-    bool add_chart = (now_ms - s_last_chart_time[idx] >= 10000);
-    if (add_chart) {
-        for (int i = 0; i < CHART_POINTS - 1; i++) {
-            g_crypto[idx].hist_raw[i] = g_crypto[idx].hist_raw[i + 1];
-        }
-        g_crypto[idx].hist_raw[CHART_POINTS - 1] = price;
-        if (s_history_count[idx] < CHART_POINTS) {
-            s_history_count[idx]++;
-        }
-        s_last_chart_time[idx] = now_ms;
-    }
-
-    s_price_loaded[idx] = true;
-
-    if (!s_main_card) return;
-
-    if (lvgl_port_lock(100)) {
-        if (s_loading_overlay) {
-            bool all_loaded = true;
-            for (int i = 0; i < CRYPTO_COUNT; i++) {
-                if (!s_price_loaded[i]) { all_loaded = false; break; }
-            }
-            if (all_loaded) {
-                lv_obj_delete(s_loading_overlay);
-                s_loading_overlay = NULL;
-                lv_obj_clear_flag(s_main_card, LV_OBJ_FLAG_HIDDEN);
-                for (int i = 0; i < 2; i++) {
-                    lv_obj_clear_flag(s_side_card[i], LV_OBJ_FLAG_HIDDEN);
-                }
-            }
-        }
-
-        // Update main card labels
-        update_main_labels();
-
-        // Chart (throttled) — flash only on chart updates
-        if (add_chart) {
-            chart_add_point(idx);
-            flash_price(old_price, price);
-        }
-
-        // Latency label
-        if (s_main_latency) {
-            char lat_buf[16];
-            snprintf(lat_buf, sizeof(lat_buf), "%dms", latency_ms);
-            lv_label_set_text(s_main_latency, lat_buf);
-        }
-
-        // Price scroll animation
-        s_price_scale = (price < 1.0) ? 100000 : 100;
-        int32_t old_val = (int32_t)(old_price * s_price_scale);
-        int32_t new_val = (int32_t)(price * s_price_scale);
-        if (old_price > 0 && old_val != new_val) {
-            lv_anim_t a;
-            lv_anim_init(&a);
-            lv_anim_set_var(&a, s_main_price);
-            lv_anim_set_values(&a, old_val, new_val);
-            lv_anim_set_duration(&a, 500);
-            lv_anim_set_exec_cb(&a, price_anim_cb);
-            lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-            lv_anim_start(&a);
-            price_anim_cb(NULL, old_val);
-        }
-
-        lvgl_port_unlock();
-
-        // LED: mood color always, flash only on chart update
-        led_set_market_mood(change_pct >= 0);
-        if (add_chart && old_price > 0 && price != old_price) {
-            led_flash_price(price > old_price);
         }
     }
 }
@@ -741,9 +664,6 @@ void ui_init(void)
 // ── Teardown (used before entering WiFi provisioning) ──────────────
 void ui_cleanup(void)
 {
-    // Stop WebSocket before tearing down UI
-    ws_price_stop();
-
     // Signal background tasks to stop
     s_ui_teardown = true;
 
@@ -789,7 +709,6 @@ void ui_cleanup(void)
             s_side_chg[i] = NULL;
         }
         s_loading_overlay = NULL;
-        s_main_latency = NULL;
 
         // Clear info panel pointers
         ui_info_cleanup();

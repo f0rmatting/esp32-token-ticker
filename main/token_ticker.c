@@ -11,7 +11,6 @@
 #include "ui.h"
 #include "led.h"
 #include "price_fetch.h"
-#include "ws_price.h"
 
 static const char *TAG = "main";
 
@@ -39,7 +38,10 @@ void app_main(void)
         ui_boot_show("Syncing time...", 50);
         time_sync_init();
 
-        ui_boot_show("Fetching prices...", 70);
+        ui_boot_show("Loading charts...", 60);
+        price_fetch_history();
+
+        ui_boot_show("Fetching prices...", 80);
         price_fetch_first();
     }
 
@@ -52,7 +54,6 @@ void app_main(void)
     // Start live price polling (works even if WiFi failed — will retry)
     if (ret == ESP_OK) {
         price_fetch_start();
-        ws_price_start(0);
     }
 
     ESP_LOGI(TAG, "TokenTicker UI ready");

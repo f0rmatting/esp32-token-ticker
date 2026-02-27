@@ -15,6 +15,12 @@
  * Populates g_crypto[] so UI can show prices immediately.
  * Call before ui_init().
  */
+/**
+ * Pre-fill charts with 24h candlestick history (30m interval).
+ * Call before price_fetch_first().
+ */
+void price_fetch_history(void);
+
 void price_fetch_first(void);
 
 void price_fetch_start(void);

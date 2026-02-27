@@ -6,7 +6,6 @@
 #include "ui_internal.h"
 #include "board_config.h"
 #include "wifi_prov.h"
-#include "ws_price.h"
 
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -75,7 +74,6 @@ static void btn_task(void *arg)
                         switch_focus();
                         lvgl_port_unlock();
                     }
-                    ws_price_switch(s_focus_idx);
                 }
             }
         }
