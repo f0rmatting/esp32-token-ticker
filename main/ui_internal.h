@@ -12,21 +12,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// ── Layout constants (account for display rounded corners) ─────────
-#define MARGIN_H    6
-#define MARGIN_TOP  4
-#define CONTENT_W   (LCD_H_RES - 2 * MARGIN_H)        // 308
-#define CONTENT_H   (LCD_V_RES - 2 * MARGIN_TOP)      // 164
-#define MAIN_W      200
-#define GAP         4
-#define SIDE_W      (CONTENT_W - MAIN_W - GAP)        // 104
-#define SIDE_H      ((CONTENT_H - GAP) / 2)           // 80
-#define SIDE_X      (MARGIN_H + MAIN_W + GAP)          // 210
-#define CHART_H     80
+// ── Layout constants ────────────────────────────────────────────────
+#define MARGIN_H        12          // horizontal padding for content
+#define MARGIN_TOP      8
+#define GAP             8
+#define CONTENT_W       (LCD_H_RES - 2 * MARGIN_H)     // 296
+#define CONTENT_H       (LCD_V_RES - 2 * MARGIN_TOP)   // 164
+
+// Main panel (left) + side panel (right)
+#define SIDE_W      80
+#define SIDE_X      (LCD_H_RES - MARGIN_H - SIDE_W)            // 228
+#define SIDE_H      CONTENT_H                                   // 156
+#define SIDE_ROW_H  90                                          // card row height for marquee (incl. gap)
+#define CHART_Y     76
+#define CHART_H     (LCD_V_RES - CHART_Y)                      // 96
+#define PILL_H      26
+#define PILL_RADIUS 13
+
 #define CHART_POINTS      48
 #define CHART_INTERVAL_MS (30 * 60 * 1000)   // 30 min between chart samples
 
-#define CRYPTO_COUNT 3
+#define CRYPTO_COUNT 4
 
 // ── Crypto data ────────────────────────────────────────────────────
 typedef struct {
@@ -47,13 +53,14 @@ extern bool s_animating;
 extern bool s_show_info;
 extern lv_obj_t *s_loading_overlay;
 
-// Main card widgets (defined in ui.c, needed by ui_info.c for slide)
-extern lv_obj_t *s_main_card;
-extern lv_obj_t *s_side_card[2];
+// Main panel + side cards (defined in ui.c, needed by ui_info.c for slide)
+extern lv_obj_t *s_main_panel;
+extern lv_obj_t *s_side_viewport;
 
 // ── Helpers (defined in ui.c) ──────────────────────────────────────
 lv_color_t chg_color(double pct);
 void format_price(char *buf, size_t len, double price);
+void format_compact_price(char *buf, size_t len, double price);
 void format_change(char *buf, size_t len, double pct);
 
 // ── Teardown flag (set by ui_cleanup, checked by background tasks) ──

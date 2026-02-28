@@ -6,6 +6,10 @@
 #include "ui_internal.h"
 #include "wifi.h"
 
+LV_FONT_DECLARE(font_mono_10)
+LV_FONT_DECLARE(font_mono_12)
+LV_FONT_DECLARE(font_mono_24)
+
 #include "driver/temperature_sensor.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
@@ -63,7 +67,7 @@ void create_info_panel(lv_obj_t *parent)
     s_info_panel = lv_obj_create(parent);
     lv_obj_set_size(s_info_panel, LCD_H_RES, LCD_V_RES);
     lv_obj_set_pos(s_info_panel, 0, 0);
-    lv_obj_set_style_bg_color(s_info_panel, lv_color_hex(0x0F0F1A), 0);
+    lv_obj_set_style_bg_color(s_info_panel, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_info_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_info_panel, 0, 0);
     lv_obj_set_style_pad_all(s_info_panel, 0, 0);
@@ -77,13 +81,13 @@ void create_info_panel(lv_obj_t *parent)
     s_info_time = lv_label_create(time_card);
     lv_label_set_text(s_info_time, "--:--:--");
     lv_obj_set_style_text_color(s_info_time, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_time, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_info_time, &font_mono_24, 0);
     lv_obj_align(s_info_time, LV_ALIGN_CENTER, 0, -10);
 
     s_info_date = lv_label_create(time_card);
     lv_label_set_text(s_info_date, "");
     lv_obj_set_style_text_color(s_info_date, lv_color_hex(0x8A8A8A), 0);
-    lv_obj_set_style_text_font(s_info_date, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(s_info_date, &font_mono_12, 0);
     lv_obj_align(s_info_date, LV_ALIGN_CENTER, 0, 16);
 
     // ── System card (bottom-left): temp arc + heap arc ──────────────
@@ -98,7 +102,7 @@ void create_info_panel(lv_obj_t *parent)
     lv_obj_t *sys_title = lv_label_create(sys_card);
     lv_label_set_text(sys_title, "SYSTEM");
     lv_obj_set_style_text_color(sys_title, orange, 0);
-    lv_obj_set_style_text_font(sys_title, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(sys_title, &font_mono_10, 0);
     lv_obj_align(sys_title, LV_ALIGN_TOP_MID, 0, 0);
 
     // Arc common dimensions
@@ -119,20 +123,20 @@ void create_info_panel(lv_obj_t *parent)
     lv_obj_set_style_arc_width(s_info_temp_arc, 5, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_info_temp_arc, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_info_temp_arc, 5, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_info_temp_arc, lv_color_hex(0x00E676), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_info_temp_arc, lv_color_hex(0x00FF88), LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(s_info_temp_arc, true, LV_PART_INDICATOR);
     lv_obj_set_style_opa(s_info_temp_arc, LV_OPA_TRANSP, LV_PART_KNOB);
 
     s_info_temp_lbl = lv_label_create(s_info_temp_arc);
     lv_label_set_text(s_info_temp_lbl, "--");
     lv_obj_set_style_text_color(s_info_temp_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_temp_lbl, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_info_temp_lbl, &font_mono_10, 0);
     lv_obj_center(s_info_temp_lbl);
 
     lv_obj_t *temp_tag = lv_label_create(sys_card);
     lv_label_set_text(temp_tag, "TEMP");
     lv_obj_set_style_text_color(temp_tag, lv_color_hex(0x8A8A8A), 0);
-    lv_obj_set_style_text_font(temp_tag, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(temp_tag, &font_mono_10, 0);
     lv_obj_set_pos(temp_tag, left_cx - 16, arc_y + arc_size + 2);
 
     // ── Heap arc (right) ───────────────────────────────────────────
@@ -147,55 +151,55 @@ void create_info_panel(lv_obj_t *parent)
     lv_obj_set_style_arc_width(s_info_heap_arc, 5, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_info_heap_arc, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_info_heap_arc, 5, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_info_heap_arc, lv_color_hex(0x00E676), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_info_heap_arc, lv_color_hex(0x00FF88), LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(s_info_heap_arc, true, LV_PART_INDICATOR);
     lv_obj_set_style_opa(s_info_heap_arc, LV_OPA_TRANSP, LV_PART_KNOB);
 
     s_info_heap_lbl = lv_label_create(s_info_heap_arc);
     lv_label_set_text(s_info_heap_lbl, "--");
     lv_obj_set_style_text_color(s_info_heap_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_heap_lbl, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_info_heap_lbl, &font_mono_10, 0);
     lv_obj_center(s_info_heap_lbl);
 
     lv_obj_t *heap_tag = lv_label_create(sys_card);
     lv_label_set_text(heap_tag, "HEAP");
     lv_obj_set_style_text_color(heap_tag, lv_color_hex(0x8A8A8A), 0);
-    lv_obj_set_style_text_font(heap_tag, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(heap_tag, &font_mono_10, 0);
     lv_obj_set_pos(heap_tag, right_cx - 16, arc_y + arc_size + 2);
 
     // ── Network card (bottom-right) ────────────────────────────────
-    lv_color_t green = lv_color_hex(0x00E676);
+    lv_color_t green = lv_color_hex(0x00FF88);
     lv_obj_t *net_card = info_card(s_info_panel,
         MARGIN_H + half_w + GAP, bot_y, half_w, bot_h, green);
 
     lv_obj_t *net_title = lv_label_create(net_card);
     lv_label_set_text(net_title, "NETWORK");
     lv_obj_set_style_text_color(net_title, green, 0);
-    lv_obj_set_style_text_font(net_title, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(net_title, &font_mono_10, 0);
     lv_obj_align(net_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_info_ssid = lv_label_create(net_card);
     lv_label_set_text(s_info_ssid, "");
     lv_obj_set_style_text_color(s_info_ssid, lv_color_hex(0xA0A0A0), 0);
-    lv_obj_set_style_text_font(s_info_ssid, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_info_ssid, &font_mono_10, 0);
     lv_obj_align(s_info_ssid, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     s_info_mode = lv_label_create(net_card);
     lv_label_set_text(s_info_mode, "");
     lv_obj_set_style_text_color(s_info_mode, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_mode, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(s_info_mode, &font_mono_12, 0);
     lv_obj_align(s_info_mode, LV_ALIGN_LEFT_MID, 0, -2);
 
     s_info_ip = lv_label_create(net_card);
     lv_label_set_text(s_info_ip, "");
     lv_obj_set_style_text_color(s_info_ip, lv_color_hex(0xA0A0A0), 0);
-    lv_obj_set_style_text_font(s_info_ip, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_info_ip, &font_mono_10, 0);
     lv_obj_align(s_info_ip, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     s_info_rssi = lv_label_create(net_card);
     lv_label_set_text(s_info_rssi, "");
     lv_obj_set_style_text_color(s_info_rssi, lv_color_hex(0xA0A0A0), 0);
-    lv_obj_set_style_text_font(s_info_rssi, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_info_rssi, &font_mono_10, 0);
     lv_obj_align(s_info_rssi, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
     lv_obj_add_flag(s_info_panel, LV_OBJ_FLAG_HIDDEN);
@@ -210,9 +214,8 @@ static void anim_x_cb(void *var, int32_t v)
 static void slide_to_info_done(lv_anim_t *a)
 {
     (void)a;
-    lv_obj_add_flag(s_main_card, LV_OBJ_FLAG_HIDDEN);
-    for (int i = 0; i < 2; i++)
-        lv_obj_add_flag(s_side_card[i], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_main_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_side_viewport, LV_OBJ_FLAG_HIDDEN);
     s_animating = false;
 }
 
@@ -271,24 +274,22 @@ void toggle_info_panel(void)
         lv_obj_set_x(s_info_panel, LCD_H_RES);
         lv_obj_clear_flag(s_info_panel, LV_OBJ_FLAG_HIDDEN);
 
-        // Slide crypto cards out to the left
+        // Slide crypto panel + ticker out to the left
         lv_anim_init(&a);
-        lv_anim_set_var(&a, s_main_card);
-        lv_anim_set_values(&a, MARGIN_H, -LCD_H_RES);
+        lv_anim_set_var(&a, s_main_panel);
+        lv_anim_set_values(&a, 0, -LCD_H_RES);
         lv_anim_set_duration(&a, SLIDE_DUR);
         lv_anim_set_exec_cb(&a, anim_x_cb);
         lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
         lv_anim_start(&a);
 
-        for (int i = 0; i < 2; i++) {
-            lv_anim_init(&a);
-            lv_anim_set_var(&a, s_side_card[i]);
-            lv_anim_set_values(&a, SIDE_X, -LCD_H_RES);
-            lv_anim_set_duration(&a, SLIDE_DUR);
-            lv_anim_set_exec_cb(&a, anim_x_cb);
-            lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-            lv_anim_start(&a);
-        }
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_side_viewport);
+        lv_anim_set_values(&a, SIDE_X, -LCD_H_RES);
+        lv_anim_set_duration(&a, SLIDE_DUR);
+        lv_anim_set_exec_cb(&a, anim_x_cb);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_start(&a);
 
         // Slide info panel in from the right
         lv_anim_init(&a);
@@ -300,13 +301,11 @@ void toggle_info_panel(void)
         lv_anim_set_completed_cb(&a, slide_to_info_done);
         lv_anim_start(&a);
     } else {
-        // Prepare crypto cards off-screen right
-        lv_obj_set_x(s_main_card, LCD_H_RES);
-        lv_obj_clear_flag(s_main_card, LV_OBJ_FLAG_HIDDEN);
-        for (int i = 0; i < 2; i++) {
-            lv_obj_set_x(s_side_card[i], LCD_H_RES);
-            lv_obj_clear_flag(s_side_card[i], LV_OBJ_FLAG_HIDDEN);
-        }
+        // Prepare crypto panel + ticker off-screen right
+        lv_obj_set_x(s_main_panel, LCD_H_RES);
+        lv_obj_clear_flag(s_main_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(s_side_viewport, LCD_H_RES);
+        lv_obj_clear_flag(s_side_viewport, LV_OBJ_FLAG_HIDDEN);
 
         // Slide info panel out to the left
         lv_anim_init(&a);
@@ -318,24 +317,22 @@ void toggle_info_panel(void)
         lv_anim_set_completed_cb(&a, slide_to_crypto_done);
         lv_anim_start(&a);
 
-        // Slide crypto cards in from the right
+        // Slide crypto panel + ticker in from the right
         lv_anim_init(&a);
-        lv_anim_set_var(&a, s_main_card);
-        lv_anim_set_values(&a, LCD_H_RES, MARGIN_H);
+        lv_anim_set_var(&a, s_main_panel);
+        lv_anim_set_values(&a, LCD_H_RES, 0);
         lv_anim_set_duration(&a, SLIDE_DUR);
         lv_anim_set_exec_cb(&a, anim_x_cb);
         lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
         lv_anim_start(&a);
 
-        for (int i = 0; i < 2; i++) {
-            lv_anim_init(&a);
-            lv_anim_set_var(&a, s_side_card[i]);
-            lv_anim_set_values(&a, LCD_H_RES, SIDE_X);
-            lv_anim_set_duration(&a, SLIDE_DUR);
-            lv_anim_set_exec_cb(&a, anim_x_cb);
-            lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-            lv_anim_start(&a);
-        }
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_side_viewport);
+        lv_anim_set_values(&a, LCD_H_RES, SIDE_X);
+        lv_anim_set_duration(&a, SLIDE_DUR);
+        lv_anim_set_exec_cb(&a, anim_x_cb);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_start(&a);
     }
 }
 
@@ -396,11 +393,11 @@ void info_update_task(void *arg)
         // Temp color: green < 55, yellow 55-70, red > 70
         lv_color_t temp_color;
         if (temp_val < 55) {
-            temp_color = lv_color_hex(0x00E676);
+            temp_color = lv_color_hex(0x00FF88);
         } else if (temp_val < 70) {
             temp_color = lv_color_hex(0xFFEB3B);
         } else {
-            temp_color = lv_color_hex(0xFF5252);
+            temp_color = lv_color_hex(0xFF3366);
         }
 
         // Free heap → usage percentage
@@ -415,11 +412,11 @@ void info_update_task(void *arg)
         // Heap color: green < 70%, yellow 70-85%, red > 85%
         lv_color_t heap_color;
         if (used_pct < 70) {
-            heap_color = lv_color_hex(0x00E676);
+            heap_color = lv_color_hex(0x00FF88);
         } else if (used_pct < 85) {
             heap_color = lv_color_hex(0xFFEB3B);
         } else {
-            heap_color = lv_color_hex(0xFF5252);
+            heap_color = lv_color_hex(0xFF3366);
         }
 
         // RSSI

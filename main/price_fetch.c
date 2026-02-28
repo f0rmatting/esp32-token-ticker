@@ -31,8 +31,9 @@ static const char *s_pairs[] = {
     "BTC_USDT",
     "ETH_USDT",
     "PAXG_USDT",
+    "SUI_USDT",
 };
-#define PAIR_COUNT 3
+#define PAIR_COUNT 4
 
 static esp_http_client_handle_t s_client;
 
@@ -165,29 +166,49 @@ static void price_fetch_task(void *arg)
 
 void price_fetch_history(void)
 {
-    // Memory Defense: Check if we have enough heap for the 10KB buffer + cJSON overhead
-    if (esp_get_free_heap_size() < MAX_HIST_RESP_LEN * 3) {
-        ESP_LOGE(TAG, "Low memory, skipping history sync");
+    // Memory Defense: need ~10KB buffer + ~15KB cJSON overhead + HTTP/TLS state
+    uint32_t free_heap = esp_get_free_heap_size();
+    ESP_LOGI(TAG, "History sync: free heap = %lu bytes", (unsigned long)free_heap);
+    if (free_heap < MAX_HIST_RESP_LEN * 5) {
+        ESP_LOGE(TAG, "Low memory (%lu), skipping history sync", (unsigned long)free_heap);
         return;
     }
 
     char *buf = malloc(MAX_HIST_RESP_LEN);
-    if (!buf) return;
+    if (!buf) {
+        ESP_LOGE(TAG, "Failed to alloc history buffer");
+        return;
+    }
+
+    // Temp price array on heap to avoid 384 bytes on app_main stack
+    double *prices = (double *)malloc(CHART_POINTS * sizeof(double));
+    if (!prices) {
+        free(buf);
+        return;
+    }
 
     resp_buf_t saved = s_resp;
     s_resp = (resp_buf_t){ .buf = buf, .len = 0, .cap = MAX_HIST_RESP_LEN };
 
     for (int i = 0; i < PAIR_COUNT; i++) {
-        for (int retry = 0; retry <= MAX_RETRIES; retry++) {
-            if (!ensure_client(HISTORY_TIMEOUT_MS)) break;
+        vTaskDelay(pdMS_TO_TICKS(100));   // Yield to watchdog between coins
+
+        bool ok = false;
+        // Boot phase: only 1 retry with shorter timeout to avoid watchdog
+        for (int retry = 0; retry <= 1; retry++) {
+            if (!ensure_client(8000)) break;   // 8s timeout (< watchdog)
             char url[160];
-            snprintf(url, sizeof(url), "https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=%s&interval=30m&limit=%d", 
+            snprintf(url, sizeof(url), "https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=%s&interval=30m&limit=%d",
                      s_pairs[i], CHART_POINTS);
             esp_http_client_set_url(s_client, url);
             s_resp.len = 0;
 
+            vTaskDelay(pdMS_TO_TICKS(10));    // Yield before blocking HTTP
+
             esp_err_t err = esp_http_client_perform(s_client);
             int status = esp_http_client_get_status_code(s_client);
+
+            vTaskDelay(pdMS_TO_TICKS(10));    // Yield after HTTP
 
             if (err == ESP_OK && status == 200) {
                 s_resp.buf[s_resp.len] = '\0';
@@ -195,7 +216,6 @@ void price_fetch_history(void)
                 if (root && cJSON_IsArray(root)) {
                     int n = cJSON_GetArraySize(root);
                     if (n > CHART_POINTS) n = CHART_POINTS;
-                    double prices[CHART_POINTS];
                     for (int j = 0; j < n; j++) {
                         cJSON *candle = cJSON_GetArrayItem(root, j);
                         cJSON *close = cJSON_GetArrayItem(candle, 2);
@@ -203,17 +223,23 @@ void price_fetch_history(void)
                         prices[j] = s_close ? atof(s_close) : 0;
                     }
                     ui_set_chart_history(i, prices, n);
+                    ok = true;
                 }
                 cJSON_Delete(root);
-                break; // Success
+                if (ok) break;
             } else {
+                ESP_LOGW(TAG, "History %s failed (err=%d, status=%d), retry %d",
+                         s_pairs[i], err, status, retry);
                 reset_client();
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(500));  // Short backoff + yield
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        if (!ok) {
+            ESP_LOGW(TAG, "Skipping history for %s", s_pairs[i]);
+        }
     }
     s_resp = saved;
+    free(prices);
     free(buf);
 }
 

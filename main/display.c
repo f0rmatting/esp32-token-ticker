@@ -174,7 +174,7 @@ esp_err_t display_init(void)
     // ── 8. Flush black frame into VRAM (display is still DISPOFF) ────
     if (lvgl_port_lock(0)) {
         lv_obj_t *scr = lv_screen_active();
-        lv_obj_set_style_bg_color(scr, lv_color_hex(0x0F0F1A), 0);
+        lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
         lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
         lv_refr_now(NULL);
         lvgl_port_unlock();
