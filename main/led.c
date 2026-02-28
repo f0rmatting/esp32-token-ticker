@@ -117,7 +117,7 @@ esp_err_t led_init(void)
 
     led_strip_clear(s_strip);
 
-    xTaskCreate(led_task, "led", 2048, NULL, 2, &s_led_task);
+    xTaskCreate(led_task, "led", 3072, NULL, 2, &s_led_task);
     ESP_LOGI(TAG, "WS2812B LED initialized on GPIO%d", LED_STRIP_GPIO);
     return ESP_OK;
 }

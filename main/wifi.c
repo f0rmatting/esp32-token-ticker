@@ -114,6 +114,10 @@ esp_err_t wifi_init_sta(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg), TAG, "Set config failed");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "WiFi start failed");
 
+    // ── Power Optimization: Enable Modem-Sleep ────────────────────
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    ESP_LOGI(TAG, "WiFi Power Save enabled (Modem-Sleep)");
+
     // Create one-shot reconnect timer (used after boot for backoff)
     s_reconnect_timer = xTimerCreate("wifi_rc", pdMS_TO_TICKS(WIFI_RECONNECT_MS),
                                      pdFALSE, NULL, reconnect_timer_cb);

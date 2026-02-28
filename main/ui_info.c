@@ -20,9 +20,11 @@ static const char *TAG = "ui_info";
 
 #define SLIDE_DUR 300
 
+TaskHandle_t s_info_task;
+
 // ── Info panel widgets ─────────────────────────────────────────────
 static temperature_sensor_handle_t s_temp_sensor;
-static uint32_t s_heap_total;
+uint32_t s_heap_total;
 static lv_obj_t *s_info_panel;
 static lv_obj_t *s_info_time;
 static lv_obj_t *s_info_date;
@@ -227,6 +229,11 @@ void toggle_info_panel(void)
     s_animating = true;
     s_show_info = !s_show_info;
 
+    // Wake the info update task when panel becomes visible
+    if (s_show_info && s_info_task) {
+        xTaskNotifyGive(s_info_task);
+    }
+
     lv_anim_t a;
 
     if (s_show_info) {
@@ -340,13 +347,19 @@ static const char *s_weekdays[] = {
 void info_update_task(void *arg)
 {
     (void)arg;
+    s_info_task = xTaskGetCurrentTaskHandle();
     while (1) {
         if (s_ui_teardown) {
+            s_info_task = NULL;
             vTaskDelete(NULL);
             return;
         }
+        if (!s_show_info) {
+            // Sleep until notified by toggle_info_panel()
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
         vTaskDelay(pdMS_TO_TICKS(1000));
-        if (!s_show_info) continue;
 
         char time_buf[12] = "";
         char date_buf[48] = "";
@@ -380,11 +393,11 @@ void info_update_task(void *arg)
                 snprintf(temp_txt, sizeof(temp_txt), "%d.%d", w, f);
             }
         }
-        // Temp color: green < 40, yellow 40-60, red > 60
+        // Temp color: green < 55, yellow 55-70, red > 70
         lv_color_t temp_color;
-        if (temp_val < 40) {
+        if (temp_val < 55) {
             temp_color = lv_color_hex(0x00E676);
-        } else if (temp_val < 60) {
+        } else if (temp_val < 70) {
             temp_color = lv_color_hex(0xFFEB3B);
         } else {
             temp_color = lv_color_hex(0xFF5252);
@@ -399,11 +412,11 @@ void info_update_task(void *arg)
         if (used_pct > 100) used_pct = 100;
         char heap_txt[12];
         snprintf(heap_txt, sizeof(heap_txt), "%d%%", used_pct);
-        // Heap color: green < 30%, yellow 30-60%, red > 60%
+        // Heap color: green < 70%, yellow 70-85%, red > 85%
         lv_color_t heap_color;
-        if (used_pct < 30) {
+        if (used_pct < 70) {
             heap_color = lv_color_hex(0x00E676);
-        } else if (used_pct < 60) {
+        } else if (used_pct < 85) {
             heap_color = lv_color_hex(0xFFEB3B);
         } else {
             heap_color = lv_color_hex(0xFF5252);
@@ -441,9 +454,7 @@ void temp_sensor_init(void)
         return;
     }
     temperature_sensor_enable(s_temp_sensor);
-    s_heap_total = esp_get_free_heap_size();
-    ESP_LOGI(TAG, "Temperature sensor initialized, heap total ~%lu KB",
-             (unsigned long)(s_heap_total / 1024));
+    ESP_LOGI(TAG, "Temperature sensor initialized");
 }
 
 void ui_info_cleanup(void)

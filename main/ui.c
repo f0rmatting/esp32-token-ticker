@@ -386,6 +386,9 @@ void switch_focus(void)
     update_side_cards();
     chart_rebuild(s_focus_idx);
 
+    // Sync LED color to newly focused coin's 24h trend
+    led_set_market_mood(g_crypto[s_focus_idx].change_pct >= 0);
+
     s_animating = false;
 }
 
@@ -561,8 +564,16 @@ void ui_update_price(int idx, double price, double change_pct,
                 }
             }
         }
-        update_main_labels();
-        update_side_cards();
+        // Only refresh the cards that display this coin
+        if (idx == s_focus_idx) {
+            update_main_labels();
+        }
+        // Check if idx appears in either side card slot
+        int side0 = (s_focus_idx + 1) % CRYPTO_COUNT;
+        int side1 = (s_focus_idx + 2) % CRYPTO_COUNT;
+        if (idx == side0 || idx == side1) {
+            update_side_cards();
+        }
 
         if (idx == s_focus_idx) {
             if (add_chart) {
@@ -587,14 +598,13 @@ void ui_update_price(int idx, double price, double change_pct,
         }
 
         lvgl_port_unlock();
+    }
 
-        if (idx == s_focus_idx) {
-            ESP_LOGI(TAG, "LED: idx=%d change_pct=%.2f mood=%s",
-                     idx, change_pct, change_pct >= 0 ? "GREEN" : "RED");
-            led_set_market_mood(change_pct >= 0);
-            if (old_price > 0 && price != old_price) {
-                led_flash_price(price > old_price);
-            }
+    // LED update — always runs regardless of LVGL lock success
+    if (idx == s_focus_idx && s_main_card) {
+        led_set_market_mood(change_pct >= 0);
+        if (old_price > 0 && price != old_price) {
+            led_flash_price(price > old_price);
         }
     }
 }
@@ -667,8 +677,14 @@ void ui_cleanup(void)
     // Signal background tasks to stop
     s_ui_teardown = true;
 
-    // Give info_update_task time to exit (it checks the flag each loop)
-    vTaskDelay(pdMS_TO_TICKS(1200));
+    // Wake info_update_task in case it's blocked waiting for notification
+    extern TaskHandle_t s_info_task;
+    if (s_info_task) {
+        xTaskNotifyGive(s_info_task);
+    }
+
+    // Give info_update_task time to exit
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     if (lvgl_port_lock(0)) {
         // Delete flash timer

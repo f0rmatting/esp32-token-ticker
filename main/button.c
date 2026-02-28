@@ -96,5 +96,5 @@ void btn_init(void)
     }
     gpio_isr_handler_add(BTN_BOOT_GPIO, btn_isr_handler, NULL);
     ESP_LOGI(TAG, "BOOT button on GPIO%d", BTN_BOOT_GPIO);
-    xTaskCreate(btn_task, "btn", 4096, NULL, 5, NULL);
+    xTaskCreate(btn_task, "btn", 2048, NULL, 5, NULL);
 }

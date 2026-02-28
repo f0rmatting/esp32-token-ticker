@@ -5,6 +5,8 @@
 
 #include <stdio.h>
 #include "esp_log.h"
+#include "esp_pm.h"
+#include "esp_system.h"
 #include "display.h"
 #include "wifi.h"
 #include "time_sync.h"
@@ -14,9 +16,30 @@
 
 static const char *TAG = "main";
 
+static void power_management_init(void)
+{
+#if CONFIG_PM_ENABLE
+    // Disable light_sleep_enable because it gates the LEDC clock used for backlight
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = 160,
+        .min_freq_mhz = 40,
+        .light_sleep_enable = false 
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+    ESP_LOGI(TAG, "Power management initialized (DFS only)");
+#endif
+}
+
+// Defined in ui_info.c — capture before WiFi/TLS allocations for accuracy
+extern uint32_t s_heap_total;
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Starting TokenTicker");
+
+    s_heap_total = esp_get_free_heap_size();
+
+    power_management_init();
 
     esp_err_t ret = display_init();
     if (ret != ESP_OK) {
@@ -51,10 +74,8 @@ void app_main(void)
     ui_boot_hide();
     ui_init();
 
-    // Start live price polling (works even if WiFi failed — will retry)
-    if (ret == ESP_OK) {
-        price_fetch_start();
-    }
+    // Always start polling — if WiFi reconnects later, fetches will succeed
+    price_fetch_start();
 
     ESP_LOGI(TAG, "TokenTicker UI ready");
 }
