@@ -72,7 +72,7 @@ static lv_obj_t *s_side_price[SIDE_SLOTS];
 static lv_obj_t *s_side_chg[SIDE_SLOTS];
 static int  s_side_coin[SIDE_SLOTS]; // crypto index shown on each slot
 static int  s_side_count;            // how many non-focused coins
-static lv_timer_t *s_scroll_timer;
+
 
 // ── Boot screen ────────────────────────────────────────────────────
 volatile bool s_ui_teardown = false;
@@ -298,6 +298,10 @@ static void chart_rebuild(int idx)
         s_chart_ser = NULL;
     }
 
+    // Tint chart background with very faint green/red gradient
+    lv_obj_set_style_bg_color(s_chart,
+        item->change_pct >= 0 ? lv_color_hex(0x0D1F10) : lv_color_hex(0x1F0D12), 0);
+
     lv_chart_set_point_count(s_chart, CHART_POINTS);
     s_chart_ser = lv_chart_add_series(s_chart, chg_color(item->change_pct),
                                       LV_CHART_AXIS_PRIMARY_Y);
@@ -443,16 +447,6 @@ static void update_main_labels(void)
     lv_label_set_text(s_chg_label, buf);
     lv_obj_set_style_bg_color(s_chg_pill, chg_color(item->change_pct), 0);
     lv_obj_set_style_shadow_color(s_chg_pill, chg_color(item->change_pct), 0);
-}
-
-static void update_side_cards(void)
-{
-    // Update data for currently visible slots
-    for (int i = 0; i <= s_side_count && i < SIDE_SLOTS; i++) {
-        int ci = s_side_coin[i];
-        if (ci >= 0 && ci < CRYPTO_COUNT)
-            update_one_side(i, ci);
-    }
 }
 
 // ── Coin switch ────────────────────────────────────────────────────
@@ -686,7 +680,7 @@ void ui_update_price(int idx, double price, double change_pct,
             }
         }
 
-        if (idx == s_focus_idx) {
+        if (idx == s_focus_idx && s_loading_overlay == NULL) {
             update_main_labels();
         }
 
@@ -751,7 +745,6 @@ void ui_init(void)
 
     if (all_loaded) {
         update_main_labels();
-        update_side_cards();
         chart_rebuild(s_focus_idx);
     } else {
         lv_obj_add_flag(s_main_panel, LV_OBJ_FLAG_HIDDEN);
@@ -803,11 +796,6 @@ void ui_cleanup(void)
             lv_timer_delete(s_flash_timer);
             s_flash_timer = NULL;
         }
-        if (s_scroll_timer) {
-            lv_timer_delete(s_scroll_timer);
-            s_scroll_timer = NULL;
-        }
-
         lv_anim_delete(s_main_price, NULL);
         lv_anim_delete(s_chg_pill, NULL);
         lv_anim_delete(s_main_panel, NULL);

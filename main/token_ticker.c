@@ -13,6 +13,7 @@
 #include "ui.h"
 #include "led.h"
 #include "price_fetch.h"
+#include "homekit.h"
 
 static const char *TAG = "main";
 
@@ -66,9 +67,12 @@ void app_main(void)
 
         ui_boot_show("Fetching prices...", 80);
         price_fetch_first();
+
+        ui_boot_show("Starting HomeKit...", 90);
+        homekit_init();
     }
 
-    ui_boot_show("Loading UI...", 90);
+    ui_boot_show("Loading UI...", 95);
 
     // Remove boot screen, build main UI
     ui_boot_hide();

@@ -6,6 +6,7 @@
 #include "ui_internal.h"
 #include "board_config.h"
 #include "wifi_prov.h"
+#include "homekit.h"
 
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -50,8 +51,9 @@ static void btn_task(void *arg)
             }
 
             if (long_pressed) {
-                // Long press 3s -> enter provisioning mode
+                // Long press 3s -> reset WiFi + HomeKit, enter provisioning
                 ESP_LOGI(TAG, "Long press detected, entering config mode");
+                homekit_reset();
                 wifi_prov_start(); // blocks forever (reboots after config)
                 continue;
             }
@@ -68,8 +70,12 @@ static void btn_task(void *arg)
                     lvgl_port_unlock();
                 }
             } else {
-                // Single click -> switch coin (only in crypto view)
-                if (!s_show_info) {
+                // Single click
+                if (s_show_info) {
+                    // Info panel: send HomeKit switch event to Apple Home
+                    homekit_send_switch_press();
+                } else {
+                    // Crypto view: switch focused coin
                     if (lvgl_port_lock(100)) {
                         switch_focus();
                         lvgl_port_unlock();

@@ -6,6 +6,7 @@
 #include "price_fetch.h"
 #include "ui.h"
 #include "ui_internal.h"
+#include "homekit.h"
 
 #include "esp_http_client.h"
 #include "esp_tls.h"
@@ -34,6 +35,35 @@ static const char *s_pairs[] = {
     "SUI_USDT",
 };
 #define PAIR_COUNT 4
+
+// ── Price alert: surge/crash detection for focused coin ─────────────
+#define ALERT_SURGE_PCT    5.0   // +5% 24h change → surge
+#define ALERT_CRASH_PCT   -5.0   // -5% 24h change → crash
+#define ALERT_RESET_PCT    3.0   // must come back within ±3% to re-arm
+
+static bool s_surge_sent;
+static bool s_crash_sent;
+
+static void check_price_alert(int idx, double change_pct)
+{
+    if (idx != s_focus_idx) return;
+
+    if (!s_surge_sent && change_pct >= ALERT_SURGE_PCT) {
+        s_surge_sent = true;
+        homekit_send_switch_press();
+        ESP_LOGW(TAG, "SURGE alert: %s %.1f%%", s_pairs[idx], change_pct);
+    } else if (s_surge_sent && change_pct < ALERT_RESET_PCT) {
+        s_surge_sent = false;
+    }
+
+    if (!s_crash_sent && change_pct <= ALERT_CRASH_PCT) {
+        s_crash_sent = true;
+        homekit_send_switch_double_press();
+        ESP_LOGW(TAG, "CRASH alert: %s %.1f%%", s_pairs[idx], change_pct);
+    } else if (s_crash_sent && change_pct > -ALERT_RESET_PCT) {
+        s_crash_sent = false;
+    }
+}
 
 static esp_http_client_handle_t s_client;
 
@@ -82,8 +112,10 @@ static bool parse_ticker(int idx, const char *pair, const char *json)
         const char *s_low  = j_low  ? cJSON_GetStringValue(j_low)  : NULL;
 
         if (s_last && s_chg) {
-            ui_update_price(idx, atof(s_last), atof(s_chg), 
+            double chg = atof(s_chg);
+            ui_update_price(idx, atof(s_last), chg,
                             s_high ? atof(s_high) : 0, s_low ? atof(s_low) : 0);
+            check_price_alert(idx, chg);
             ok = true;
         }
     }

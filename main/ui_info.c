@@ -5,10 +5,11 @@
 
 #include "ui_internal.h"
 #include "wifi.h"
+#include "homekit.h"
 
 LV_FONT_DECLARE(font_mono_10)
 LV_FONT_DECLARE(font_mono_12)
-LV_FONT_DECLARE(font_mono_24)
+LV_FONT_DECLARE(font_mono_14)
 
 #include "driver/temperature_sensor.h"
 #include "esp_system.h"
@@ -31,15 +32,15 @@ static temperature_sensor_handle_t s_temp_sensor;
 uint32_t s_heap_total;
 static lv_obj_t *s_info_panel;
 static lv_obj_t *s_info_time;
-static lv_obj_t *s_info_date;
 static lv_obj_t *s_info_temp_arc;
 static lv_obj_t *s_info_temp_lbl;
 static lv_obj_t *s_info_heap_arc;
 static lv_obj_t *s_info_heap_lbl;
 static lv_obj_t *s_info_ssid;
-static lv_obj_t *s_info_ip;
 static lv_obj_t *s_info_rssi;
+static lv_obj_t *s_rssi_bars[4];
 static lv_obj_t *s_info_mode;
+static lv_obj_t *s_info_setup;
 
 // ── Helper: create a styled card inside the info panel ─────────────
 static lv_obj_t *info_card(lv_obj_t *parent, int x, int y, int w, int h,
@@ -74,25 +75,20 @@ void create_info_panel(lv_obj_t *parent)
     lv_obj_clear_flag(s_info_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     // ── Time card (top, wide) ──────────────────────────────────────
+    #define TIME_CARD_H 28
     lv_color_t cyan = lv_color_hex(0x00BCD4);
     lv_obj_t *time_card = info_card(s_info_panel,
-        MARGIN_H, MARGIN_TOP, CONTENT_W, 70, cyan);
+        MARGIN_H, MARGIN_TOP, CONTENT_W, TIME_CARD_H, cyan);
 
     s_info_time = lv_label_create(time_card);
     lv_label_set_text(s_info_time, "--:--:--");
     lv_obj_set_style_text_color(s_info_time, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_time, &font_mono_24, 0);
-    lv_obj_align(s_info_time, LV_ALIGN_CENTER, 0, -10);
-
-    s_info_date = lv_label_create(time_card);
-    lv_label_set_text(s_info_date, "");
-    lv_obj_set_style_text_color(s_info_date, lv_color_hex(0x8A8A8A), 0);
-    lv_obj_set_style_text_font(s_info_date, &font_mono_12, 0);
-    lv_obj_align(s_info_date, LV_ALIGN_CENTER, 0, 16);
+    lv_obj_set_style_text_font(s_info_time, &font_mono_12, 0);
+    lv_obj_align(s_info_time, LV_ALIGN_CENTER, 0, 0);
 
     // ── System card (bottom-left): temp arc + heap arc ──────────────
-    int bot_y = MARGIN_TOP + 70 + GAP;
-    int bot_h = CONTENT_H - 70 - GAP;
+    int bot_y = MARGIN_TOP + TIME_CARD_H + GAP;
+    int bot_h = CONTENT_H - TIME_CARD_H - GAP;
     int half_w = (CONTENT_W - GAP) / 2;
 
     lv_color_t orange = lv_color_hex(0xFF9800);
@@ -105,24 +101,25 @@ void create_info_panel(lv_obj_t *parent)
     lv_obj_set_style_text_font(sys_title, &font_mono_10, 0);
     lv_obj_align(sys_title, LV_ALIGN_TOP_MID, 0, 0);
 
-    // Arc common dimensions
-    int arc_size = 48;
-    int arc_y = 14;              // offset below title
-    int left_cx = half_w / 4;    // center x of left arc
-    int right_cx = half_w * 3 / 4; // center x of right arc
+    // Arc common dimensions — fill available card space
+    int arc_size = 64;
+    int arc_y = 20;              // offset below title (spaced from SYSTEM label)
+    int cw = half_w - 12;       // content width inside padding (132)
+    int left_cx = cw / 4;       // 33 — center of left half
+    int right_cx = cw * 3 / 4;  // 99 — center of right half
 
     // ── Temperature arc (left) ─────────────────────────────────────
     s_info_temp_arc = lv_arc_create(sys_card);
     lv_obj_set_size(s_info_temp_arc, arc_size, arc_size);
-    lv_obj_set_pos(s_info_temp_arc, left_cx - arc_size / 2 - 6, arc_y);
+    lv_obj_set_pos(s_info_temp_arc, left_cx - arc_size / 2, arc_y);
     lv_arc_set_rotation(s_info_temp_arc, 270);
     lv_arc_set_range(s_info_temp_arc, 0, 80);
     lv_arc_set_value(s_info_temp_arc, 0);
     lv_arc_set_bg_angles(s_info_temp_arc, 0, 360);
     lv_obj_remove_flag(s_info_temp_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_info_temp_arc, 5, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_info_temp_arc, 6, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_info_temp_arc, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_info_temp_arc, 5, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_info_temp_arc, 6, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_info_temp_arc, lv_color_hex(0x00FF88), LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(s_info_temp_arc, true, LV_PART_INDICATOR);
     lv_obj_set_style_opa(s_info_temp_arc, LV_OPA_TRANSP, LV_PART_KNOB);
@@ -130,27 +127,27 @@ void create_info_panel(lv_obj_t *parent)
     s_info_temp_lbl = lv_label_create(s_info_temp_arc);
     lv_label_set_text(s_info_temp_lbl, "--");
     lv_obj_set_style_text_color(s_info_temp_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_temp_lbl, &font_mono_10, 0);
+    lv_obj_set_style_text_font(s_info_temp_lbl, &font_mono_12, 0);
     lv_obj_center(s_info_temp_lbl);
 
     lv_obj_t *temp_tag = lv_label_create(sys_card);
     lv_label_set_text(temp_tag, "TEMP");
     lv_obj_set_style_text_color(temp_tag, lv_color_hex(0x8A8A8A), 0);
     lv_obj_set_style_text_font(temp_tag, &font_mono_10, 0);
-    lv_obj_set_pos(temp_tag, left_cx - 16, arc_y + arc_size + 2);
+    lv_obj_align_to(temp_tag, s_info_temp_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
 
     // ── Heap arc (right) ───────────────────────────────────────────
     s_info_heap_arc = lv_arc_create(sys_card);
     lv_obj_set_size(s_info_heap_arc, arc_size, arc_size);
-    lv_obj_set_pos(s_info_heap_arc, right_cx - arc_size / 2 - 6, arc_y);
+    lv_obj_set_pos(s_info_heap_arc, right_cx - arc_size / 2, arc_y);
     lv_arc_set_rotation(s_info_heap_arc, 270);
     lv_arc_set_range(s_info_heap_arc, 0, 100);
     lv_arc_set_value(s_info_heap_arc, 0);
     lv_arc_set_bg_angles(s_info_heap_arc, 0, 360);
     lv_obj_remove_flag(s_info_heap_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_info_heap_arc, 5, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_info_heap_arc, 6, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_info_heap_arc, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_info_heap_arc, 5, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_info_heap_arc, 6, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_info_heap_arc, lv_color_hex(0x00FF88), LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(s_info_heap_arc, true, LV_PART_INDICATOR);
     lv_obj_set_style_opa(s_info_heap_arc, LV_OPA_TRANSP, LV_PART_KNOB);
@@ -158,14 +155,14 @@ void create_info_panel(lv_obj_t *parent)
     s_info_heap_lbl = lv_label_create(s_info_heap_arc);
     lv_label_set_text(s_info_heap_lbl, "--");
     lv_obj_set_style_text_color(s_info_heap_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_heap_lbl, &font_mono_10, 0);
+    lv_obj_set_style_text_font(s_info_heap_lbl, &font_mono_12, 0);
     lv_obj_center(s_info_heap_lbl);
 
     lv_obj_t *heap_tag = lv_label_create(sys_card);
     lv_label_set_text(heap_tag, "HEAP");
     lv_obj_set_style_text_color(heap_tag, lv_color_hex(0x8A8A8A), 0);
     lv_obj_set_style_text_font(heap_tag, &font_mono_10, 0);
-    lv_obj_set_pos(heap_tag, right_cx - 16, arc_y + arc_size + 2);
+    lv_obj_align_to(heap_tag, s_info_heap_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
 
     // ── Network card (bottom-right) ────────────────────────────────
     lv_color_t green = lv_color_hex(0x00FF88);
@@ -188,19 +185,35 @@ void create_info_panel(lv_obj_t *parent)
     lv_label_set_text(s_info_mode, "");
     lv_obj_set_style_text_color(s_info_mode, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_info_mode, &font_mono_12, 0);
-    lv_obj_align(s_info_mode, LV_ALIGN_LEFT_MID, 0, -2);
+    lv_obj_align(s_info_mode, LV_ALIGN_TOP_LEFT, 0, 22);
 
-    s_info_ip = lv_label_create(net_card);
-    lv_label_set_text(s_info_ip, "");
-    lv_obj_set_style_text_color(s_info_ip, lv_color_hex(0xA0A0A0), 0);
-    lv_obj_set_style_text_font(s_info_ip, &font_mono_10, 0);
-    lv_obj_align(s_info_ip, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    // ── Signal strength bars (4 ascending bars) ───────────────────
+    int bar_y = 46;
+    static const int bar_h[] = {5, 9, 13, 17};
+    for (int i = 0; i < 4; i++) {
+        s_rssi_bars[i] = lv_obj_create(net_card);
+        lv_obj_set_size(s_rssi_bars[i], 5, bar_h[i]);
+        lv_obj_set_pos(s_rssi_bars[i], i * 7, bar_y + 17 - bar_h[i]);
+        lv_obj_set_style_bg_color(s_rssi_bars[i], lv_color_hex(0x2A2A2A), 0);
+        lv_obj_set_style_bg_opa(s_rssi_bars[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_rssi_bars[i], 0, 0);
+        lv_obj_set_style_radius(s_rssi_bars[i], 1, 0);
+        lv_obj_set_style_pad_all(s_rssi_bars[i], 0, 0);
+        lv_obj_clear_flag(s_rssi_bars[i], LV_OBJ_FLAG_SCROLLABLE);
+    }
 
     s_info_rssi = lv_label_create(net_card);
     lv_label_set_text(s_info_rssi, "");
     lv_obj_set_style_text_color(s_info_rssi, lv_color_hex(0xA0A0A0), 0);
-    lv_obj_set_style_text_font(s_info_rssi, &font_mono_10, 0);
-    lv_obj_align(s_info_rssi, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_text_font(s_info_rssi, &font_mono_12, 0);
+    lv_obj_set_pos(s_info_rssi, 32, bar_y);
+
+    // ── HomeKit status ─────────────────────────────────────────────
+    s_info_setup = lv_label_create(net_card);
+    lv_label_set_text(s_info_setup, "");
+    lv_obj_set_style_text_color(s_info_setup, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_info_setup, &font_mono_14, 0);
+    lv_obj_align(s_info_setup, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     lv_obj_add_flag(s_info_panel, LV_OBJ_FLAG_HIDDEN);
 }
@@ -226,6 +239,23 @@ static void slide_to_crypto_done(lv_anim_t *a)
     s_animating = false;
 }
 
+static void update_rssi_bars(int rssi)
+{
+    int level;
+    if (rssi >= -65)      level = 4;
+    else if (rssi >= -75) level = 3;
+    else if (rssi >= -85) level = 2;
+    else if (rssi >= -95) level = 1;
+    else                  level = 0;
+
+    lv_color_t active   = lv_color_hex(0x00FF88);
+    lv_color_t inactive = lv_color_hex(0x2A2A2A);
+    for (int i = 0; i < 4; i++) {
+        lv_obj_set_style_bg_color(s_rssi_bars[i],
+            (i < level) ? active : inactive, 0);
+    }
+}
+
 void toggle_info_panel(void)
 {
     if (s_animating || s_loading_overlay) return;
@@ -243,11 +273,11 @@ void toggle_info_panel(void)
         // Refresh network info on show
         char buf[48];
         lv_label_set_text(s_info_ssid, wifi_get_ssid());
-        lv_label_set_text(s_info_ip, wifi_get_ip_str());
 
         int rssi = wifi_get_rssi();
         snprintf(buf, sizeof(buf), "%d dBm", rssi);
         lv_label_set_text(s_info_rssi, buf);
+        update_rssi_bars(rssi);
 
         // Wi-Fi channel + protocol
         {
@@ -268,6 +298,18 @@ void toggle_info_panel(void)
                          proto, band, ap.primary);
                 lv_label_set_text(s_info_mode, mode_buf);
             }
+        }
+
+        // HomeKit status
+        int paired = homekit_get_paired_count();
+        if (paired > 0) {
+            char hk_buf[32];
+            snprintf(hk_buf, sizeof(hk_buf), "HomeKit Paired (%d)", paired);
+            lv_label_set_text(s_info_setup, hk_buf);
+        } else {
+            char hk_buf[32];
+            snprintf(hk_buf, sizeof(hk_buf), "SETUP %s", homekit_get_setup_code());
+            lv_label_set_text(s_info_setup, hk_buf);
         }
 
         // Prepare info panel off-screen right
@@ -336,10 +378,7 @@ void toggle_info_panel(void)
     }
 }
 
-// ── Background task: updates time, date, temperature, heap, RSSI ───
-static const char *s_weekdays[] = {
-    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
-};
+// ── Background task: updates time, temperature, heap, RSSI ─────────
 
 void info_update_task(void *arg)
 {
@@ -359,10 +398,9 @@ void info_update_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         char time_buf[12] = "";
-        char date_buf[48] = "";
         char rssi_buf[16] = "";
 
-        // Time & date with weekday
+        // Time
         time_t now;
         struct tm ti;
         time(&now);
@@ -370,9 +408,6 @@ void info_update_task(void *arg)
         if (ti.tm_year + 1900 >= 2024) {
             snprintf(time_buf, sizeof(time_buf), "%02d:%02d:%02d",
                      ti.tm_hour, ti.tm_min, ti.tm_sec);
-            snprintf(date_buf, sizeof(date_buf), "%04d-%02d-%02d  %s",
-                     ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday,
-                     s_weekdays[ti.tm_wday]);
         }
 
         // Chip temperature → arc value (range 0-80°C)
@@ -427,7 +462,6 @@ void info_update_task(void *arg)
 
         if (lvgl_port_lock(100)) {
             if (time_buf[0]) lv_label_set_text(s_info_time, time_buf);
-            if (date_buf[0]) lv_label_set_text(s_info_date, date_buf);
             // Temp arc
             lv_arc_set_value(s_info_temp_arc, temp_val);
             lv_obj_set_style_arc_color(s_info_temp_arc, temp_color, LV_PART_INDICATOR);
@@ -437,6 +471,18 @@ void info_update_task(void *arg)
             lv_obj_set_style_arc_color(s_info_heap_arc, heap_color, LV_PART_INDICATOR);
             lv_label_set_text(s_info_heap_lbl, heap_txt);
             if (rssi_buf[0]) lv_label_set_text(s_info_rssi, rssi_buf);
+            update_rssi_bars(rssi);
+            // HomeKit status
+            int paired = homekit_get_paired_count();
+            if (paired > 0) {
+                char hk_buf[32];
+                snprintf(hk_buf, sizeof(hk_buf), "HomeKit Paired (%d)", paired);
+                lv_label_set_text(s_info_setup, hk_buf);
+            } else {
+                char hk_buf[32];
+                snprintf(hk_buf, sizeof(hk_buf), "SETUP %s", homekit_get_setup_code());
+                lv_label_set_text(s_info_setup, hk_buf);
+            }
             lvgl_port_unlock();
         }
     }
@@ -458,13 +504,13 @@ void ui_info_cleanup(void)
 {
     s_info_panel = NULL;
     s_info_time = NULL;
-    s_info_date = NULL;
     s_info_temp_arc = NULL;
     s_info_temp_lbl = NULL;
     s_info_heap_arc = NULL;
     s_info_heap_lbl = NULL;
     s_info_ssid = NULL;
-    s_info_ip = NULL;
     s_info_rssi = NULL;
+    for (int i = 0; i < 4; i++) s_rssi_bars[i] = NULL;
     s_info_mode = NULL;
+    s_info_setup = NULL;
 }

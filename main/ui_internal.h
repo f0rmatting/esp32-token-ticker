@@ -17,7 +17,7 @@
 #define MARGIN_TOP      8
 #define GAP             8
 #define CONTENT_W       (LCD_H_RES - 2 * MARGIN_H)     // 296
-#define CONTENT_H       (LCD_V_RES - 2 * MARGIN_TOP)   // 164
+#define CONTENT_H       (LCD_V_RES - 2 * MARGIN_TOP)   // 156
 
 // Main panel (left) + side panel (right)
 #define SIDE_W      80
