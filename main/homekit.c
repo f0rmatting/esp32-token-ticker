@@ -39,7 +39,11 @@ void homekit_init(void)
     hap_acc_cfg_t cfg = {
         .name = "TokenTicker",
         .manufacturer = "Bitcoin Go Too Moon",
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+        .model = "TokenTicker-S3",
+#else
         .model = "TokenTicker-C6",
+#endif
         .serial_num = serial,
         .fw_rev = "1.0.1",
         .hw_rev = "1.0",

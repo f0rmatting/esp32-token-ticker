@@ -529,13 +529,14 @@ static void update_main_labels(void)
 }
 
 // ── Coin switch ────────────────────────────────────────────────────
-void switch_focus(void)
+static void switch_focus_by(int step)
 {
     if (s_animating) return;
     s_animating = true;
-    s_focus_idx = (s_focus_idx + 1) % g_active_count;
+    s_focus_idx = (s_focus_idx + step + g_active_count) % g_active_count;
 
     price_fetch_prioritize_chart(s_focus_idx);
+    price_fetch_on_focus_change(s_focus_idx);
 
     update_main_labels();
     rebuild_side_coins();
@@ -545,6 +546,38 @@ void switch_focus(void)
 
     s_animating = false;
 }
+
+void switch_focus(void)
+{
+    switch_focus_by(1);
+}
+
+// ── Touch gesture (S3 touch variant only) ──────────────────────────
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+static lv_obj_t *s_gesture_layer;
+
+static void gesture_event_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_animating) return;
+
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+
+    if (dir == LV_DIR_LEFT && !s_show_info) {
+        toggle_info_panel();
+    } else if (dir == LV_DIR_RIGHT && s_show_info) {
+        toggle_info_panel();
+    } else if (!s_loading_overlay) {
+        if (dir == LV_DIR_TOP && !s_show_info) {
+            switch_focus_by(1);
+        } else if (dir == LV_DIR_BOTTOM && !s_show_info) {
+            switch_focus_by(-1);
+        }
+    }
+}
+#endif
 
 // ── Build UI ───────────────────────────────────────────────────────
 static void create_main_panel(lv_obj_t *parent)
@@ -845,10 +878,23 @@ void ui_init(void)
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     create_main_panel(scr);
     create_side_cards(scr);
     create_info_panel(scr);
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    // Transparent gesture overlay — captures all swipe events
+    s_gesture_layer = lv_obj_create(scr);
+    lv_obj_set_size(s_gesture_layer, LCD_H_RES, LCD_V_RES);
+    lv_obj_set_pos(s_gesture_layer, 0, 0);
+    lv_obj_set_style_bg_opa(s_gesture_layer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_gesture_layer, 0, 0);
+    lv_obj_set_style_pad_all(s_gesture_layer, 0, 0);
+    lv_obj_clear_flag(s_gesture_layer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(s_gesture_layer, gesture_event_cb, LV_EVENT_GESTURE, NULL);
+#endif
 
     bool all_loaded = true;
     for (int i = 0; i < g_active_count; i++) {
@@ -868,7 +914,7 @@ void ui_init(void)
         lv_obj_set_style_bg_opa(s_loading_overlay, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s_loading_overlay, 0, 0);
         lv_obj_set_style_pad_all(s_loading_overlay, 0, 0);
-        lv_obj_clear_flag(s_loading_overlay, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(s_loading_overlay, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t *spinner = lv_spinner_create(s_loading_overlay);
         lv_obj_set_size(spinner, 36, 36);
@@ -945,6 +991,9 @@ void ui_cleanup(void)
             s_side_chg[i] = NULL;
         }
         s_loading_overlay = NULL;
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+        s_gesture_layer = NULL;
+#endif
 
         ui_info_cleanup();
 

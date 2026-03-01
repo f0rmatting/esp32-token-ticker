@@ -18,6 +18,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#include "esp_lcd_jd9853.h"
+#include "driver/i2c_master.h"
+#include "esp_lcd_touch_axs5106.h"
+#endif
+
 static const char *TAG = "display";
 
 static esp_lcd_panel_handle_t s_panel;
@@ -40,7 +46,7 @@ static void early_gpio_init(void)
     // Hard reset: RST low ≥50ms
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    // Release reset, wait 120ms for ST7789 internal power stabilization
+    // Release reset, wait 120ms for LCD internal power stabilization
     gpio_set_level(LCD_PIN_RST, 1);
     vTaskDelay(pdMS_TO_TICKS(120));
 }
@@ -78,6 +84,7 @@ esp_err_t display_init(void)
     ESP_LOGI(TAG, "Initializing backlight (off)");
     backlight_init();
 
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
     // Pull SD_CS (GPIO4) high so SD card doesn't interfere on shared SPI bus
     gpio_config_t sd_cs_cfg = {
         .pin_bit_mask = BIT64(GPIO_NUM_4),
@@ -85,6 +92,7 @@ esp_err_t display_init(void)
     };
     gpio_config(&sd_cs_cfg);
     gpio_set_level(GPIO_NUM_4, 1);
+#endif
 
     // ── 3. SPI bus (CS is already high from early_gpio_init) ─────────
     ESP_LOGI(TAG, "Initializing SPI bus");
@@ -116,19 +124,27 @@ esp_err_t display_init(void)
         esp_lcd_new_panel_io_spi(LCD_SPI_HOST, &io_cfg, &io_handle),
         TAG, "LCD panel IO init failed");
 
-    // ── 5. ST7789 panel (we already did hard reset, driver does another — fine)
-    ESP_LOGI(TAG, "Initializing ST7789 panel");
+    // ── 5. LCD panel ─────────────────────────────────────────────────
     const esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = LCD_PIN_RST,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
     };
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    ESP_LOGI(TAG, "Initializing JD9853 panel");
+    ESP_RETURN_ON_ERROR(
+        esp_lcd_new_panel_jd9853(io_handle, &panel_cfg, &s_panel),
+        TAG, "JD9853 panel init failed");
+#else
+    ESP_LOGI(TAG, "Initializing ST7789 panel");
     ESP_RETURN_ON_ERROR(
         esp_lcd_new_panel_st7789(io_handle, &panel_cfg, &s_panel),
         TAG, "ST7789 panel init failed");
+#endif
 
     esp_lcd_panel_reset(s_panel);
-    esp_lcd_panel_init(s_panel);       // sends SLPOUT + config, but NOT DISPON
+    esp_lcd_panel_init(s_panel);
 
     // ── 6. Explicit DISPOFF before any configuration ─────────────────
     esp_lcd_panel_disp_on_off(s_panel, false);
@@ -170,6 +186,51 @@ esp_err_t display_init(void)
         ESP_LOGE(TAG, "Failed to add LVGL display");
         return ESP_FAIL;
     }
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    // ── 7b. Touch panel (AXS5106 via I2C) ────────────────────────────
+    ESP_LOGI(TAG, "Initializing touch panel");
+    i2c_master_bus_config_t i2c_cfg = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = 0,
+        .scl_io_num = TP_I2C_SCL,
+        .sda_io_num = TP_I2C_SDA,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t i2c_bus = NULL;
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_cfg, &i2c_bus), TAG, "I2C bus init failed");
+
+    i2c_device_config_t tp_dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = ESP_LCD_TOUCH_IO_I2C_AXS5106_ADDRESS,
+        .scl_speed_hz = 400000,
+    };
+    i2c_master_dev_handle_t tp_dev = NULL;
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(i2c_bus, &tp_dev_cfg, &tp_dev), TAG, "I2C add touch device failed");
+
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = LCD_V_RES,    // portrait native: 172
+        .y_max = LCD_H_RES,    // portrait native: 320
+        .rst_gpio_num = TP_PIN_RST,
+        .int_gpio_num = GPIO_NUM_NC,   // polling mode for diagnosis
+        .flags = {
+            // Landscape 90°: swap XY to match display orientation
+            .swap_xy = 1,
+            .mirror_x = 0,
+            .mirror_y = 0,
+        },
+    };
+    esp_lcd_touch_handle_t touch_handle = NULL;
+    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_axs5106(tp_dev, &tp_cfg, &touch_handle), TAG, "Touch init failed");
+
+    const lvgl_port_touch_cfg_t touch_cfg = {
+        .disp = disp,
+        .handle = touch_handle,
+    };
+    lvgl_port_add_touch(&touch_cfg);
+    ESP_LOGI(TAG, "Touch panel initialized");
+#endif
 
     // ── 8. Flush black frame into VRAM (display is still DISPOFF) ────
     if (lvgl_port_lock(0)) {

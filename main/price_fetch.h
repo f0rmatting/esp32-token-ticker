@@ -21,6 +21,13 @@
  */
 void price_fetch_prioritize_chart(int idx);
 
+/**
+ * Notify price_fetch that the focused token changed.
+ * After a 3s delay, the new token will be fetched immediately.
+ * Rapid successive calls cancel previous pending fetches.
+ */
+void price_fetch_on_focus_change(int new_idx);
+
 void price_fetch_first(void);
 
 void price_fetch_start(void);

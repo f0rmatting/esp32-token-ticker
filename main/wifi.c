@@ -141,7 +141,14 @@ esp_err_t wifi_init_sta(void)
     if (bits & WIFI_CONNECTED_BIT) {
         return ESP_OK;
     }
-    ESP_LOGW(TAG, "WiFi connection timed out");
+
+    // Switch to background reconnect mode so the timer keeps retrying
+    s_initial_connect = false;
+    if (s_reconnect_timer) {
+        xTimerStart(s_reconnect_timer, 0);
+    }
+
+    ESP_LOGW(TAG, "WiFi connection timed out, will keep retrying in background");
     return ESP_ERR_TIMEOUT;
 }
 

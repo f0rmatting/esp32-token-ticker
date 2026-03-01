@@ -16,6 +16,7 @@
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -27,6 +28,12 @@ static const char *TAG = "price_fetch";
 #define TICKER_TIMEOUT_MS     3000
 #define HISTORY_TIMEOUT_MS    10000
 #define MAX_RETRIES           2
+
+// ── Polling intervals ──────────────────────────────────────────────
+#define FOCUS_POLL_MS          10000   // focused token: 10s
+#define BG_POLL_MS             600000  // background tokens: 10min
+#define FOCUS_SWITCH_DELAY_MS  3000    // delay after switching focus
+#define LOOP_TICK_MS           2000    // main loop step: 2s
 
 
 // ── Price alert: surge/crash detection for focused coin ─────────────
@@ -184,6 +191,11 @@ static bool fetch_ticker(int idx)
     return false;
 }
 
+// ── Focus-aware polling state ──────────────────────────────────────
+static int64_t s_last_fetch_ms[MAX_TOKENS];      // per-token last fetch time
+static volatile int s_pending_focus = -1;         // pending focus idx (-1=none)
+static volatile int64_t s_focus_change_ms = 0;    // timestamp of last focus switch
+
 // ── Background chart history loading ────────────────────────────────
 static volatile int s_chart_priority = -1;      // user-requested coin, or -1
 static bool s_chart_loaded[MAX_TOKENS];          // per-coin loaded flag
@@ -257,31 +269,53 @@ static int pick_next_chart(void)
     return -1;  // all loaded
 }
 
-#define POLL_CYCLE_MS  10000   // total cycle time for all tickers
-
 static void price_fetch_task(void *arg)
 {
     (void)arg;
-    int ticker_idx = 0;
 
     while (1) {
-        /* Load one pending chart per cycle */
+        int64_t now = esp_timer_get_time() / 1000;
+
+        // 1. Check pending focus switch (3s delay expired & still current focus)
+        int pf = s_pending_focus;
+        if (pf >= 0) {
+            if (pf != s_focus_idx) {
+                s_pending_focus = -1;   // switched away, cancel
+            } else if (now - s_focus_change_ms >= FOCUS_SWITCH_DELAY_MS) {
+                fetch_ticker(pf);
+                s_last_fetch_ms[pf] = now;
+                s_pending_focus = -1;
+                ESP_LOGI(TAG, "Focus switch fetch: %s", g_crypto[pf].symbol);
+            }
+        }
+
+        // 2. Load one pending chart per cycle
         int ci = pick_next_chart();
         if (ci >= 0) {
             if (fetch_one_history(ci)) {
                 s_chart_loaded[ci] = true;
                 ESP_LOGI(TAG, "Chart loaded: %s", g_crypto[ci].symbol);
             }
-            vTaskDelay(pdMS_TO_TICKS(500));
         }
 
-        /* Fetch one ticker in round-robin (evenly spaced) */
-        fetch_ticker(ticker_idx);
-        ticker_idx = (ticker_idx + 1) % g_active_count;
+        // 3. Focused token: poll every FOCUS_POLL_MS
+        int focus = s_focus_idx;
+        if (now - s_last_fetch_ms[focus] >= FOCUS_POLL_MS) {
+            fetch_ticker(focus);
+            s_last_fetch_ms[focus] = now;
+        }
 
-        int delay_ms = POLL_CYCLE_MS / g_active_count;
-        if (delay_ms < 1500) delay_ms = 1500;
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        // 4. Background tokens: poll every BG_POLL_MS, max 1 per loop
+        for (int i = 0; i < g_active_count; i++) {
+            if (i == focus) continue;
+            if (now - s_last_fetch_ms[i] >= BG_POLL_MS) {
+                fetch_ticker(i);
+                s_last_fetch_ms[i] = now;
+                break;   // only 1 background token per loop
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(LOOP_TICK_MS));
     }
 }
 
@@ -292,10 +326,20 @@ void price_fetch_prioritize_chart(int idx)
     }
 }
 
+void price_fetch_on_focus_change(int new_idx)
+{
+    s_pending_focus = new_idx;
+    s_focus_change_ms = esp_timer_get_time() / 1000;
+}
+
 void price_fetch_first(void)
 {
     /* Fetch all current prices */
     for (int i = 0; i < g_active_count; i++) fetch_ticker(i);
+
+    /* Record fetch time so background task doesn't re-fetch immediately */
+    int64_t now = esp_timer_get_time() / 1000;
+    for (int i = 0; i < g_active_count; i++) s_last_fetch_ms[i] = now;
 
     /* Pre-load charts for first 2 tokens so UI enters with chart ready */
     for (int i = 0; i < 2 && i < g_active_count; i++) {

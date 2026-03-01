@@ -5,3 +5,5 @@ dependencies:
     version: "^2"
   espressif/led_strip:
     version: "^2"
+  espressif/esp_lcd_touch:
+    version: "^1"

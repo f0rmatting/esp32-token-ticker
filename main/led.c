@@ -98,6 +98,11 @@ static void led_task(void *arg)
 // ── Public API ──────────────────────────────────────────────────────
 esp_err_t led_init(void)
 {
+    if (LED_STRIP_GPIO == GPIO_NUM_NC) {
+        ESP_LOGI(TAG, "No LED strip on this board, skipping init");
+        return ESP_OK;
+    }
+
     led_strip_config_t strip_cfg = {
         .strip_gpio_num = LED_STRIP_GPIO,
         .max_leds = LED_STRIP_NUM,

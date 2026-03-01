@@ -23,9 +23,14 @@ static void power_management_init(void)
 #if CONFIG_PM_ENABLE
     // Disable light_sleep_enable because it gates the LEDC clock used for backlight
     esp_pm_config_t pm_config = {
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+        .max_freq_mhz = 240,
+        .min_freq_mhz = 80,
+#else
         .max_freq_mhz = 160,
         .min_freq_mhz = 40,
-        .light_sleep_enable = false 
+#endif
+        .light_sleep_enable = false
     };
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
     ESP_LOGI(TAG, "Power management initialized (DFS only)");
