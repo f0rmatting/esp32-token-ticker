@@ -40,12 +40,12 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
 # ── LVGL setup ──────────────────────────────────────────────────
 CONFIG_LV_FONT_MONTSERRAT_10=y
-CONFIG_LV_FONT_MONTSERRAT_12=y
+# CONFIG_LV_FONT_MONTSERRAT_12 is not set
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
-CONFIG_LV_FONT_MONTSERRAT_28=y
+# CONFIG_LV_FONT_MONTSERRAT_28 is not set
 CONFIG_LV_USE_CHART=y
 
 # ── TLS & HTTPS Performance ──────────────────────────────────────
@@ -66,3 +66,14 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 # Slim down memory usage
 CONFIG_NEWLIB_NANO_FORMAT=y
+
+# ── Disable unused components ────────────────────────────────────
+# CONFIG_MQTT_ENABLED is not set
+
+# ── Network buffer optimization ──────────────────────────────────
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=4096
+CONFIG_LWIP_TCP_WND_DEFAULT=4096
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
+
+# ── TLS buffer optimization (API responses < 8KB) ───────────────
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192

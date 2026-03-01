@@ -16,10 +16,10 @@
  * Call before ui_init().
  */
 /**
- * Pre-fill charts with 24h candlestick history (30m interval).
- * Call before price_fetch_first().
+ * Set priority coin for background chart history loading.
+ * Called from UI when user switches focus or at init.
  */
-void price_fetch_history(void);
+void price_fetch_prioritize_chart(int idx);
 
 void price_fetch_first(void);
 

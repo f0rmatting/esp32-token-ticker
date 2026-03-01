@@ -12,3 +12,8 @@
  * After this call, LVGL is ready for UI creation.
  */
 esp_err_t display_init(void);
+
+/**
+ * Set backlight brightness (0 = off, 255 = max).
+ */
+void display_set_backlight(int brightness);

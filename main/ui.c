@@ -5,8 +5,9 @@
 
 #include "ui.h"
 #include "ui_internal.h"
+#include "price_fetch.h"
 #include "led.h"
-#include "crypto_logos.h"
+#include "boot_logo.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,6 +16,7 @@
 #include "lvgl.h"
 
 #include <sys/time.h>
+#include <time.h>
 
 LV_FONT_DECLARE(font_mono_10)
 LV_FONT_DECLARE(font_mono_12)
@@ -25,13 +27,8 @@ LV_FONT_DECLARE(font_mono_24)
 
 static const char *TAG = "ui";
 
-// ── Crypto data (populated by live price fetcher) ──────────────────
-crypto_item_t g_crypto[] = {
-    {"BTC", "Bitcoin",  &img_btc_logo, 0, 0, 0, 0, {0}},
-    {"ETH", "Ethereum", &img_eth_logo, 0, 0, 0, 0, {0}},
-    {"PAXG", "PAX Gold", &img_paxg_logo, 0, 0, 0, 0, {0}},
-    {"SUI", "Sui",      &img_sui_logo, 0, 0, 0, 0, {0}},
-};
+// ── Crypto data (populated at runtime by token_config_load) ────────
+crypto_item_t g_crypto[MAX_TOKENS] = {0};
 
 // ── Shared state ───────────────────────────────────────────────────
 int  s_focus_idx = 0;
@@ -40,8 +37,8 @@ bool s_show_info = false;
 
 // Loading overlay — shown until first prices arrive
 lv_obj_t *s_loading_overlay;
-static bool s_price_loaded[CRYPTO_COUNT];
-static int  s_history_count[CRYPTO_COUNT];
+static bool s_price_loaded[MAX_TOKENS];
+static int  s_history_count[MAX_TOKENS];
 
 // Price flash animation
 static lv_timer_t *s_flash_timer;
@@ -50,7 +47,13 @@ static lv_timer_t *s_flash_timer;
 static int32_t s_price_scale = 100;
 
 // Chart throttle: record one point per CHART_INTERVAL_MS
-static int64_t s_last_chart_time[CRYPTO_COUNT];
+static int64_t s_last_chart_time[MAX_TOKENS];
+
+// Stale data detection
+#define STALE_THRESHOLD_S  60
+static int64_t  s_last_price_update_s;    // epoch seconds of last successful update
+static bool     s_stale_shown;
+static lv_timer_t *s_stale_timer;
 
 // ── Main panel widgets ──────────────────────────────────────────────
 lv_obj_t *s_main_panel;
@@ -59,12 +62,13 @@ static lv_obj_t *s_main_sym;
 static lv_obj_t *s_main_price;
 static lv_obj_t *s_chg_pill;
 static lv_obj_t *s_chg_label;
+static lv_obj_t *s_stale_dot;    // small red dot when data is stale
 static lv_obj_t *s_chart;
 static lv_chart_series_t *s_chart_ser;
 
 // ── Side card widgets (marquee) ─────────────────────────────────────
 lv_obj_t *s_side_viewport;
-#define SIDE_SLOTS 7                 // enough cards to fill viewport during full scroll
+#define SIDE_SLOTS 9                 // enough cards to fill viewport during full scroll
 static lv_obj_t *s_side_card[SIDE_SLOTS];
 static lv_obj_t *s_side_logo[SIDE_SLOTS];
 static lv_obj_t *s_side_sym[SIDE_SLOTS];
@@ -78,15 +82,19 @@ static int  s_side_count;            // how many non-focused coins
 volatile bool s_ui_teardown = false;
 
 static lv_obj_t *s_boot_scr;
-static lv_obj_t *s_boot_label;
-static lv_obj_t *s_boot_bar;
+
+static void shine_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_x((lv_obj_t *)var, v);
+}
 
 void ui_boot_show(const char *msg, int progress_pct)
 {
+    (void)msg;
+    (void)progress_pct;
+
     if (lvgl_port_lock(0)) {
         if (s_boot_scr) {
-            lv_label_set_text(s_boot_label, msg);
-            lv_bar_set_value(s_boot_bar, progress_pct, LV_ANIM_ON);
             lvgl_port_unlock();
             return;
         }
@@ -103,30 +111,76 @@ void ui_boot_show(const char *msg, int progress_pct)
         lv_obj_set_style_pad_all(s_boot_scr, 0, 0);
         lv_obj_clear_flag(s_boot_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-        lv_obj_t *brand = lv_label_create(s_boot_scr);
-        lv_label_set_text(brand, "TokenTicker");
-        lv_obj_set_style_text_color(brand, lv_color_hex(0x00FF88), 0);
-        lv_obj_set_style_text_font(brand, &font_mono_24, 0);
-        lv_obj_align(brand, LV_ALIGN_CENTER, 0, -24);
+        // Wrapper clips the shine effect to logo bounds
+        int logo_w = (int)boot_logo_dsc.header.w;
+        int logo_h = (int)boot_logo_dsc.header.h;
 
-        s_boot_bar = lv_bar_create(s_boot_scr);
-        lv_obj_set_size(s_boot_bar, 200, 8);
-        lv_obj_align(s_boot_bar, LV_ALIGN_CENTER, 0, 10);
-        lv_bar_set_range(s_boot_bar, 0, 100);
-        lv_bar_set_value(s_boot_bar, progress_pct, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(s_boot_bar, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(s_boot_bar, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(s_boot_bar, 4, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(s_boot_bar, lv_color_hex(0x00FF88), LV_PART_INDICATOR);
-        lv_obj_set_style_bg_opa(s_boot_bar, LV_OPA_COVER, LV_PART_INDICATOR);
-        lv_obj_set_style_radius(s_boot_bar, 4, LV_PART_INDICATOR);
-        lv_obj_set_style_anim_time(s_boot_bar, 300, LV_PART_INDICATOR);
+        lv_obj_t *wrap = lv_obj_create(s_boot_scr);
+        lv_obj_set_size(wrap, logo_w, logo_h);
+        lv_obj_center(wrap);
+        lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(wrap, 0, 0);
+        lv_obj_set_style_pad_all(wrap, 0, 0);
+        lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
 
-        s_boot_label = lv_label_create(s_boot_scr);
-        lv_label_set_text(s_boot_label, msg);
-        lv_obj_set_style_text_color(s_boot_label, lv_color_hex(0x8A8A8A), 0);
-        lv_obj_set_style_text_font(s_boot_label, &font_mono_14, 0);
-        lv_obj_align(s_boot_label, LV_ALIGN_CENTER, 0, 36);
+        lv_obj_t *logo = lv_image_create(wrap);
+        lv_image_set_src(logo, &boot_logo_dsc);
+        lv_obj_set_pos(logo, 0, 0);
+
+        // ── Glass shine: composite gradient beam ────────────────
+        // Single container keeps both layers locked together;
+        // wrap clips shadows to logo bounds — no black edges.
+        lv_obj_t *shine = lv_obj_create(wrap);
+        lv_obj_set_size(shine, 14, logo_h);
+        lv_obj_set_style_bg_opa(shine, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(shine, 0, 0);
+        lv_obj_set_style_pad_all(shine, 0, 0);
+        lv_obj_clear_flag(shine, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(shine, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+
+        // Layer 1 — soft glow (base refraction, feathered edges via shadow)
+        lv_obj_t *glow = lv_obj_create(shine);
+        lv_obj_set_size(glow, 14, logo_h);
+        lv_obj_set_pos(glow, 0, 0);
+        lv_obj_set_style_bg_color(glow, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_bg_opa(glow, LV_OPA_10, 0);
+        lv_obj_set_style_border_width(glow, 0, 0);
+        lv_obj_set_style_pad_all(glow, 0, 0);
+        lv_obj_set_style_radius(glow, 7, 0);
+        lv_obj_set_style_shadow_width(glow, 28, 0);
+        lv_obj_set_style_shadow_spread(glow, 4, 0);
+        lv_obj_set_style_shadow_color(glow, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_shadow_opa(glow, LV_OPA_10, 0);
+        lv_obj_set_style_blend_mode(glow, LV_BLEND_MODE_ADDITIVE, 0);
+        lv_obj_clear_flag(glow, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        // Layer 2 — narrow bright core (specular highlight)
+        lv_obj_t *core = lv_obj_create(shine);
+        lv_obj_set_size(core, 3, logo_h);
+        lv_obj_set_pos(core, 5, 0);
+        lv_obj_set_style_bg_color(core, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_bg_opa(core, LV_OPA_30, 0);
+        lv_obj_set_style_border_width(core, 0, 0);
+        lv_obj_set_style_pad_all(core, 0, 0);
+        lv_obj_set_style_radius(core, 2, 0);
+        lv_obj_set_style_shadow_width(core, 14, 0);
+        lv_obj_set_style_shadow_spread(core, 2, 0);
+        lv_obj_set_style_shadow_color(core, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_shadow_opa(core, LV_OPA_20, 0);
+        lv_obj_set_style_blend_mode(core, LV_BLEND_MODE_ADDITIVE, 0);
+        lv_obj_clear_flag(core, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        // Ease-in-out sweep: slow → fast → slow
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, shine);
+        lv_anim_set_values(&a, -50, logo_w);
+        lv_anim_set_duration(&a, 1800);
+        lv_anim_set_exec_cb(&a, shine_anim_cb);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_set_repeat_delay(&a, 1000);
+        lv_anim_start(&a);
 
         lvgl_port_unlock();
     }
@@ -138,8 +192,6 @@ void ui_boot_hide(void)
         if (s_boot_scr) {
             lv_obj_delete(s_boot_scr);
             s_boot_scr = NULL;
-            s_boot_label = NULL;
-            s_boot_bar = NULL;
         }
         lvgl_port_unlock();
     }
@@ -210,11 +262,16 @@ lv_color_t chg_color(double pct)
 }
 
 // ── Logo image ─────────────────────────────────────────────────────
+#define LOGO_SRC_PX 36   // source image resolution from convert_to_lvgl.py
+
 static lv_obj_t *create_logo_img(lv_obj_t *parent, int size)
 {
     lv_obj_t *img = lv_image_create(parent);
     lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
     lv_obj_set_size(img, size, size);
+    if (size != LOGO_SRC_PX) {
+        lv_image_set_scale(img, 256 * size / LOGO_SRC_PX);
+    }
     return img;
 }
 
@@ -246,6 +303,28 @@ static void flash_price(double old_price, double new_price)
     }
     s_flash_timer = lv_timer_create(flash_reset_cb, 1000, NULL);
     lv_timer_set_repeat_count(s_flash_timer, 1);
+}
+
+// ── Stale data check (runs every 5s via LVGL timer) ─────────────────
+static void stale_check_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    if (!s_main_panel || s_loading_overlay || s_show_info) return;
+
+    time_t now;
+    time(&now);
+    bool stale = (s_last_price_update_s > 0 &&
+                  (int64_t)now - s_last_price_update_s > STALE_THRESHOLD_S);
+
+    if (stale && !s_stale_shown) {
+        s_stale_shown = true;
+        if (s_stale_dot) lv_obj_clear_flag(s_stale_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_opa(s_main_price, LV_OPA_50, 0);
+    } else if (!stale && s_stale_shown) {
+        s_stale_shown = false;
+        if (s_stale_dot) lv_obj_add_flag(s_stale_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_opa(s_main_price, LV_OPA_COVER, 0);
+    }
 }
 
 // ── Pill breathing animation ───────────────────────────────────────
@@ -400,9 +479,9 @@ static void start_marquee(void)
 static void rebuild_side_coins(void)
 {
     // Collect non-focused coin indices
-    int coins[CRYPTO_COUNT];
+    int coins[g_active_count];
     s_side_count = 0;
-    for (int i = 0; i < CRYPTO_COUNT; i++) {
+    for (int i = 0; i < g_active_count; i++) {
         if (i != s_focus_idx) coins[s_side_count++] = i;
     }
     if (s_side_count == 0) return;
@@ -454,7 +533,9 @@ void switch_focus(void)
 {
     if (s_animating) return;
     s_animating = true;
-    s_focus_idx = (s_focus_idx + 1) % CRYPTO_COUNT;
+    s_focus_idx = (s_focus_idx + 1) % g_active_count;
+
+    price_fetch_prioritize_chart(s_focus_idx);
 
     update_main_labels();
     rebuild_side_coins();
@@ -476,14 +557,14 @@ static void create_main_panel(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_main_panel, 0, 0);
     lv_obj_clear_flag(s_main_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    // ── Header (y=4): [Logo 32px] SYM (18pt) ─────────────────────
+    // ── Header (y=4): [Logo 32px] SYM (20pt) ─────────────────────
     s_main_logo = create_logo_img(s_main_panel, 32);
-    lv_obj_set_pos(s_main_logo, MARGIN_H, MARGIN_TOP);
+    lv_obj_set_pos(s_main_logo, MARGIN_H + 6, MARGIN_TOP);
 
     s_main_sym = lv_label_create(s_main_panel);
     lv_obj_set_style_text_color(s_main_sym, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_main_sym, &font_mono_18, 0);
-    lv_obj_set_pos(s_main_sym, MARGIN_H + 38, MARGIN_TOP + 6);
+    lv_obj_set_style_text_font(s_main_sym, &font_mono_20, 0);
+    lv_obj_set_pos(s_main_sym, MARGIN_H + 44, MARGIN_TOP + 5);
 
     // ── Price (y=42) ──────────────────────────────────────────────
     s_main_price = lv_label_create(s_main_panel);
@@ -544,6 +625,17 @@ static void create_main_panel(lv_obj_t *parent)
     lv_obj_set_style_line_opa(s_chart, LV_OPA_COVER, LV_PART_ITEMS);
     lv_chart_set_div_line_count(s_chart, 0, 0);
     s_chart_ser = NULL;
+
+    // ── Stale indicator (small red dot, top-right of price) ─────
+    s_stale_dot = lv_obj_create(s_main_panel);
+    lv_obj_set_size(s_stale_dot, 6, 6);
+    lv_obj_set_style_radius(s_stale_dot, 3, 0);
+    lv_obj_set_style_bg_color(s_stale_dot, lv_color_hex(0xFF3366), 0);
+    lv_obj_set_style_bg_opa(s_stale_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_stale_dot, 0, 0);
+    lv_obj_set_pos(s_stale_dot, MARGIN_H + 42 + 30, MARGIN_TOP + 2);
+    lv_obj_add_flag(s_stale_dot, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_stale_dot, LV_OBJ_FLAG_SCROLLABLE);
 }
 
 static void create_side_cards(lv_obj_t *parent)
@@ -613,7 +705,7 @@ static void create_side_cards(lv_obj_t *parent)
 // ── Pre-fill chart history from candlestick data ────────────────────
 void ui_set_chart_history(int idx, const double *prices, int count)
 {
-    if (idx < 0 || idx >= CRYPTO_COUNT) return;
+    if (idx < 0 || idx >= g_active_count) return;
     if (count <= 0) return;
     if (count > CHART_POINTS) count = CHART_POINTS;
 
@@ -628,6 +720,14 @@ void ui_set_chart_history(int idx, const double *prices, int count)
     s_last_chart_time[idx] = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 
     ESP_LOGI(TAG, "Chart history loaded for idx=%d: %d points", idx, count);
+
+    // Refresh chart if this is the focused coin and UI is ready
+    if (idx == s_focus_idx && s_main_panel && !s_loading_overlay) {
+        if (lvgl_port_lock(100)) {
+            chart_rebuild(idx);
+            lvgl_port_unlock();
+        }
+    }
 }
 
 // ── Live price update (called from price_fetch task) ───────────────
@@ -635,7 +735,7 @@ void ui_update_price(int idx, double price, double change_pct,
                      double high_24h, double low_24h)
 {
     if (s_ui_teardown) return;
-    if (idx < 0 || idx >= CRYPTO_COUNT) return;
+    if (idx < 0 || idx >= g_active_count) return;
 
     double old_price = g_crypto[idx].price;
 
@@ -661,26 +761,44 @@ void ui_update_price(int idx, double price, double change_pct,
     }
     s_price_loaded[idx] = true;
 
+    // Update stale-data timestamp
+    time_t now_epoch;
+    time(&now_epoch);
+    s_last_price_update_s = (int64_t)now_epoch;
+
     if (!s_main_panel) return;
 
+    // Pre-compute outside lock to minimize lock hold time
+    bool is_focus = (idx == s_focus_idx);
+    bool need_anim = false;
+    int32_t old_val = 0, new_val = 0;
+    if (is_focus) {
+        int scale = (price < 1.0) ? 100000 : 100;
+        old_val = (int32_t)(old_price * scale);
+        new_val = (int32_t)(price * scale);
+        need_anim = (old_price > 0 && old_val != new_val);
+        s_price_scale = scale;
+    }
+
+    bool all_loaded = true;
+    if (s_loading_overlay) {
+        for (int i = 0; i < g_active_count; i++) {
+            if (!s_price_loaded[i]) { all_loaded = false; break; }
+        }
+    }
+
     if (lvgl_port_lock(100)) {
-        if (s_loading_overlay) {
-            bool all_loaded = true;
-            for (int i = 0; i < CRYPTO_COUNT; i++) {
-                if (!s_price_loaded[i]) { all_loaded = false; break; }
-            }
-            if (all_loaded) {
-                lv_obj_delete(s_loading_overlay);
-                s_loading_overlay = NULL;
-                lv_obj_clear_flag(s_main_panel, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clear_flag(s_side_viewport, LV_OBJ_FLAG_HIDDEN);
-                update_main_labels();
-                rebuild_side_coins();
-                chart_rebuild(s_focus_idx);
-            }
+        if (s_loading_overlay && all_loaded) {
+            lv_obj_delete(s_loading_overlay);
+            s_loading_overlay = NULL;
+            lv_obj_clear_flag(s_main_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_side_viewport, LV_OBJ_FLAG_HIDDEN);
+            update_main_labels();
+            rebuild_side_coins();
+            chart_rebuild(s_focus_idx);
         }
 
-        if (idx == s_focus_idx && s_loading_overlay == NULL) {
+        if (is_focus && !s_loading_overlay) {
             update_main_labels();
         }
 
@@ -690,16 +808,10 @@ void ui_update_price(int idx, double price, double change_pct,
             }
         }
 
-        if (idx == s_focus_idx) {
-            if (add_chart) {
-                chart_add_point(idx);
-            }
+        if (is_focus) {
+            if (add_chart) chart_add_point(idx);
             flash_price(old_price, price);
-
-            s_price_scale = (price < 1.0) ? 100000 : 100;
-            int32_t old_val = (int32_t)(old_price * s_price_scale);
-            int32_t new_val = (int32_t)(price * s_price_scale);
-            if (old_price > 0 && old_val != new_val) {
+            if (need_anim) {
                 lv_anim_t a;
                 lv_anim_init(&a);
                 lv_anim_set_var(&a, s_main_price);
@@ -715,7 +827,7 @@ void ui_update_price(int idx, double price, double change_pct,
         lvgl_port_unlock();
     }
 
-    if (idx == s_focus_idx && s_main_panel) {
+    if (is_focus) {
         led_set_market_mood(change_pct >= 0);
         if (old_price > 0 && price != old_price) {
             led_flash_price(price > old_price);
@@ -739,7 +851,7 @@ void ui_init(void)
     create_info_panel(scr);
 
     bool all_loaded = true;
-    for (int i = 0; i < CRYPTO_COUNT; i++) {
+    for (int i = 0; i < g_active_count; i++) {
         if (!s_price_loaded[i]) { all_loaded = false; break; }
     }
 
@@ -774,7 +886,12 @@ void ui_init(void)
         lv_obj_align(loading_lbl, LV_ALIGN_CENTER, 0, 20);
     }
 
+    // Stale data check timer (every 5s)
+    s_stale_timer = lv_timer_create(stale_check_cb, 5000, NULL);
+
     lvgl_port_unlock();
+
+    price_fetch_prioritize_chart(s_focus_idx);
 
     xTaskCreate(info_update_task, "info", 3072, NULL, 3, NULL);
 }
@@ -796,6 +913,10 @@ void ui_cleanup(void)
             lv_timer_delete(s_flash_timer);
             s_flash_timer = NULL;
         }
+        if (s_stale_timer) {
+            lv_timer_delete(s_stale_timer);
+            s_stale_timer = NULL;
+        }
         lv_anim_delete(s_main_price, NULL);
         lv_anim_delete(s_chg_pill, NULL);
         lv_anim_delete(s_main_panel, NULL);
@@ -805,14 +926,13 @@ void ui_cleanup(void)
         lv_obj_clean(scr);
 
         s_boot_scr = NULL;
-        s_boot_label = NULL;
-        s_boot_bar = NULL;
         s_main_panel = NULL;
         s_main_logo = NULL;
         s_main_sym = NULL;
         s_main_price = NULL;
         s_chg_pill = NULL;
         s_chg_label = NULL;
+        s_stale_dot = NULL;
         s_chart = NULL;
         s_chart_ser = NULL;
         s_side_viewport = NULL;

@@ -6,13 +6,13 @@
 #include "price_fetch.h"
 #include "ui.h"
 #include "ui_internal.h"
+#include "token_config.h"
 #include "homekit.h"
 
 #include "esp_http_client.h"
 #include "esp_tls.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
-#include "esp_system.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,17 +24,10 @@ static const char *TAG = "price_fetch";
 
 #define MAX_RESP_LEN          1024
 #define MAX_HIST_RESP_LEN     10240
-#define TICKER_TIMEOUT_MS     5000
-#define HISTORY_TIMEOUT_MS    15000
+#define TICKER_TIMEOUT_MS     3000
+#define HISTORY_TIMEOUT_MS    10000
 #define MAX_RETRIES           2
 
-static const char *s_pairs[] = {
-    "BTC_USDT",
-    "ETH_USDT",
-    "PAXG_USDT",
-    "SUI_USDT",
-};
-#define PAIR_COUNT 4
 
 // ── Price alert: surge/crash detection for focused coin ─────────────
 #define ALERT_SURGE_PCT    5.0   // +5% 24h change → surge
@@ -51,7 +44,7 @@ static void check_price_alert(int idx, double change_pct)
     if (!s_surge_sent && change_pct >= ALERT_SURGE_PCT) {
         s_surge_sent = true;
         homekit_send_switch_press();
-        ESP_LOGW(TAG, "SURGE alert: %s %.1f%%", s_pairs[idx], change_pct);
+        ESP_LOGW(TAG, "SURGE alert: %s %.1f%%", g_crypto[idx].symbol, change_pct);
     } else if (s_surge_sent && change_pct < ALERT_RESET_PCT) {
         s_surge_sent = false;
     }
@@ -59,7 +52,7 @@ static void check_price_alert(int idx, double change_pct)
     if (!s_crash_sent && change_pct <= ALERT_CRASH_PCT) {
         s_crash_sent = true;
         homekit_send_switch_double_press();
-        ESP_LOGW(TAG, "CRASH alert: %s %.1f%%", s_pairs[idx], change_pct);
+        ESP_LOGW(TAG, "CRASH alert: %s %.1f%%", g_crypto[idx].symbol, change_pct);
     } else if (s_crash_sent && change_pct > -ALERT_RESET_PCT) {
         s_crash_sent = false;
     }
@@ -156,8 +149,15 @@ static void reset_client(void)
 
 static bool fetch_ticker(int idx)
 {
+    const char *pair = g_crypto[idx].pair;
+    if (!pair) {
+        // Stablecoin with no trading pair — report $1.00
+        ui_update_price(idx, 1.0, 0.0, 1.0, 1.0);
+        return true;
+    }
+
     char url[128];
-    snprintf(url, sizeof(url), "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=%s", s_pairs[idx]);
+    snprintf(url, sizeof(url), "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=%s", pair);
 
     for (int retry = 0; retry <= MAX_RETRIES; retry++) {
         if (!ensure_client(TICKER_TIMEOUT_MS)) return false;
@@ -169,14 +169,14 @@ static bool fetch_ticker(int idx)
 
         if (err == ESP_OK && status == 200) {
             s_resp.buf[s_resp.len] = '\0';
-            return parse_ticker(idx, s_pairs[idx], s_resp.buf);
+            return parse_ticker(idx, pair, s_resp.buf);
         }
 
         if (status == 429) {
             ESP_LOGW(TAG, "Rate limited (429), backoff...");
-            vTaskDelay(pdMS_TO_TICKS(5000)); // Wait longer on rate limit
+            vTaskDelay(pdMS_TO_TICKS(5000));
         } else {
-            ESP_LOGW(TAG, "Fetch %s failed (err=%d, status=%d), retry %d", s_pairs[idx], err, status, retry);
+            ESP_LOGW(TAG, "Fetch %s failed (err=%d, status=%d), retry %d", pair, err, status, retry);
             reset_client();
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
@@ -184,103 +184,129 @@ static bool fetch_ticker(int idx)
     return false;
 }
 
+// ── Background chart history loading ────────────────────────────────
+static volatile int s_chart_priority = -1;      // user-requested coin, or -1
+static bool s_chart_loaded[MAX_TOKENS];          // per-coin loaded flag
+
+// Static buffers for chart history — reused across calls, avoids heap fragmentation
+static char   s_hist_buf[MAX_HIST_RESP_LEN];
+static double s_hist_prices[CHART_POINTS];
+
+static bool fetch_one_history(int idx)
+{
+    const char *pair = g_crypto[idx].pair;
+    if (!pair) return true;  // stablecoin, no chart needed
+
+    resp_buf_t saved = s_resp;
+    s_resp = (resp_buf_t){ .buf = s_hist_buf, .len = 0, .cap = MAX_HIST_RESP_LEN };
+
+    bool ok = false;
+    for (int retry = 0; retry <= 1; retry++) {
+        if (!ensure_client(HISTORY_TIMEOUT_MS)) break;
+        char url[160];
+        snprintf(url, sizeof(url),
+                 "https://api.gateio.ws/api/v4/spot/candlesticks?"
+                 "currency_pair=%s&interval=30m&limit=%d",
+                 pair, CHART_POINTS);
+        esp_http_client_set_url(s_client, url);
+        s_resp.len = 0;
+
+        esp_err_t err = esp_http_client_perform(s_client);
+        int status = esp_http_client_get_status_code(s_client);
+
+        if (err == ESP_OK && status == 200) {
+            s_resp.buf[s_resp.len] = '\0';
+            cJSON *root = cJSON_Parse(s_resp.buf);
+            if (root && cJSON_IsArray(root)) {
+                int n = cJSON_GetArraySize(root);
+                if (n > CHART_POINTS) n = CHART_POINTS;
+                for (int j = 0; j < n; j++) {
+                    cJSON *candle = cJSON_GetArrayItem(root, j);
+                    if (!candle) continue;
+                    cJSON *close = cJSON_GetArrayItem(candle, 2);
+                    const char *s_close = close ? cJSON_GetStringValue(close) : NULL;
+                    s_hist_prices[j] = s_close ? atof(s_close) : 0;
+                }
+                ui_set_chart_history(idx, s_hist_prices, n);
+                ok = true;
+            }
+            cJSON_Delete(root);
+            if (ok) break;
+        } else {
+            ESP_LOGW(TAG, "History %s failed (err=%d, status=%d), retry %d",
+                     pair, err, status, retry);
+            reset_client();
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
+
+    s_resp = saved;
+    return ok;
+}
+
+/* Pick next coin whose chart is not yet loaded.
+ * Priority goes to s_chart_priority if set, otherwise sequential. */
+static int pick_next_chart(void)
+{
+    int prio = s_chart_priority;
+    if (prio >= 0 && prio < g_active_count && !s_chart_loaded[prio])
+        return prio;
+    for (int i = 0; i < g_active_count; i++) {
+        if (!s_chart_loaded[i]) return i;
+    }
+    return -1;  // all loaded
+}
+
+#define POLL_CYCLE_MS  10000   // total cycle time for all tickers
+
 static void price_fetch_task(void *arg)
 {
     (void)arg;
+    int ticker_idx = 0;
+
     while (1) {
-        for (int i = 0; i < PAIR_COUNT; i++) {
-            fetch_ticker(i);
-            vTaskDelay(pdMS_TO_TICKS(200));
+        /* Load one pending chart per cycle */
+        int ci = pick_next_chart();
+        if (ci >= 0) {
+            if (fetch_one_history(ci)) {
+                s_chart_loaded[ci] = true;
+                ESP_LOGI(TAG, "Chart loaded: %s", g_crypto[ci].symbol);
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
-        vTaskDelay(pdMS_TO_TICKS(10000));
+
+        /* Fetch one ticker in round-robin (evenly spaced) */
+        fetch_ticker(ticker_idx);
+        ticker_idx = (ticker_idx + 1) % g_active_count;
+
+        int delay_ms = POLL_CYCLE_MS / g_active_count;
+        if (delay_ms < 1500) delay_ms = 1500;
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
 }
 
-void price_fetch_history(void)
+void price_fetch_prioritize_chart(int idx)
 {
-    // Memory Defense: need ~10KB buffer + ~15KB cJSON overhead + HTTP/TLS state
-    uint32_t free_heap = esp_get_free_heap_size();
-    ESP_LOGI(TAG, "History sync: free heap = %lu bytes", (unsigned long)free_heap);
-    if (free_heap < MAX_HIST_RESP_LEN * 5) {
-        ESP_LOGE(TAG, "Low memory (%lu), skipping history sync", (unsigned long)free_heap);
-        return;
+    if (idx >= 0 && idx < g_active_count) {
+        s_chart_priority = idx;
     }
-
-    char *buf = malloc(MAX_HIST_RESP_LEN);
-    if (!buf) {
-        ESP_LOGE(TAG, "Failed to alloc history buffer");
-        return;
-    }
-
-    // Temp price array on heap to avoid 384 bytes on app_main stack
-    double *prices = (double *)malloc(CHART_POINTS * sizeof(double));
-    if (!prices) {
-        free(buf);
-        return;
-    }
-
-    resp_buf_t saved = s_resp;
-    s_resp = (resp_buf_t){ .buf = buf, .len = 0, .cap = MAX_HIST_RESP_LEN };
-
-    for (int i = 0; i < PAIR_COUNT; i++) {
-        vTaskDelay(pdMS_TO_TICKS(100));   // Yield to watchdog between coins
-
-        bool ok = false;
-        // Boot phase: only 1 retry with shorter timeout to avoid watchdog
-        for (int retry = 0; retry <= 1; retry++) {
-            if (!ensure_client(8000)) break;   // 8s timeout (< watchdog)
-            char url[160];
-            snprintf(url, sizeof(url), "https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=%s&interval=30m&limit=%d",
-                     s_pairs[i], CHART_POINTS);
-            esp_http_client_set_url(s_client, url);
-            s_resp.len = 0;
-
-            vTaskDelay(pdMS_TO_TICKS(10));    // Yield before blocking HTTP
-
-            esp_err_t err = esp_http_client_perform(s_client);
-            int status = esp_http_client_get_status_code(s_client);
-
-            vTaskDelay(pdMS_TO_TICKS(10));    // Yield after HTTP
-
-            if (err == ESP_OK && status == 200) {
-                s_resp.buf[s_resp.len] = '\0';
-                cJSON *root = cJSON_Parse(s_resp.buf);
-                if (root && cJSON_IsArray(root)) {
-                    int n = cJSON_GetArraySize(root);
-                    if (n > CHART_POINTS) n = CHART_POINTS;
-                    for (int j = 0; j < n; j++) {
-                        cJSON *candle = cJSON_GetArrayItem(root, j);
-                        cJSON *close = cJSON_GetArrayItem(candle, 2);
-                        const char *s_close = close ? cJSON_GetStringValue(close) : NULL;
-                        prices[j] = s_close ? atof(s_close) : 0;
-                    }
-                    ui_set_chart_history(i, prices, n);
-                    ok = true;
-                }
-                cJSON_Delete(root);
-                if (ok) break;
-            } else {
-                ESP_LOGW(TAG, "History %s failed (err=%d, status=%d), retry %d",
-                         s_pairs[i], err, status, retry);
-                reset_client();
-                vTaskDelay(pdMS_TO_TICKS(500));  // Short backoff + yield
-            }
-        }
-        if (!ok) {
-            ESP_LOGW(TAG, "Skipping history for %s", s_pairs[i]);
-        }
-    }
-    s_resp = saved;
-    free(prices);
-    free(buf);
 }
 
 void price_fetch_first(void)
 {
-    for (int i = 0; i < PAIR_COUNT; i++) fetch_ticker(i);
+    /* Fetch all current prices */
+    for (int i = 0; i < g_active_count; i++) fetch_ticker(i);
+
+    /* Pre-load charts for first 2 tokens so UI enters with chart ready */
+    for (int i = 0; i < 2 && i < g_active_count; i++) {
+        if (fetch_one_history(i)) {
+            s_chart_loaded[i] = true;
+            ESP_LOGI(TAG, "Boot chart ready: %s", g_crypto[i].symbol);
+        }
+    }
 }
 
 void price_fetch_start(void)
 {
-    xTaskCreate(price_fetch_task, "price", 8192, NULL, 4, NULL);
+    xTaskCreate(price_fetch_task, "price", 6144, NULL, 4, NULL);
 }

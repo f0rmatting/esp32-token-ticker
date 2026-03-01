@@ -13,6 +13,7 @@
 #include "ui.h"
 #include "led.h"
 #include "price_fetch.h"
+#include "token_config.h"
 #include "homekit.h"
 
 static const char *TAG = "main";
@@ -48,6 +49,7 @@ void app_main(void)
         return;
     }
 
+    token_config_load();
     led_init();
     btn_init();  // early init so long-press provisioning works during WiFi connect
 
@@ -59,13 +61,10 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "WiFi not connected, continuing with mock data");
     } else {
-        ui_boot_show("Syncing time...", 50);
+        ui_boot_show("Syncing time...", 40);
         time_sync_init();
 
-        ui_boot_show("Loading charts...", 60);
-        price_fetch_history();
-
-        ui_boot_show("Fetching prices...", 80);
+        ui_boot_show("Fetching prices...", 50);
         price_fetch_first();
 
         ui_boot_show("Starting HomeKit...", 90);

@@ -5,6 +5,7 @@
 
 #include "wifi_prov.h"
 #include "ui.h"
+#include "token_config.h"
 
 #include "esp_check.h"
 #include "esp_event.h"
@@ -162,6 +163,11 @@ static const char PROV_HTML[] =
     "button{background:#00E676;color:#0F0F1A;font-weight:bold;border:none;cursor:pointer;margin-top:16px}"
     "button:active{opacity:.8}"
     ".s{text-align:center;color:#888;margin:12px 0}"
+    ".tg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}"
+    ".tg label{display:flex;align-items:center;gap:6px;color:#E0E0E0;font-size:14px;"
+    "margin:0;padding:8px;background:#1A1A2E;border-radius:6px;border:1px solid #333;cursor:pointer}"
+    ".tg input{width:auto;margin:0;accent-color:#00E676}"
+    "#te{color:#FF5252;font-size:12px;text-align:center;min-height:16px}"
     "</style></head><body><div class='c'>"
     "<h2>TokenTicker</h2>"
     "<p class='s' id='st'>Scanning WiFi...</p>"
@@ -169,6 +175,19 @@ static const char PROV_HTML[] =
     "<input id='pw' type='password' placeholder='Password'>"
     "<label>Timezone</label>"
     "<select id='tz'></select>"
+    "<label>Tokens (select 4-6)</label>"
+    "<div class='tg'>"
+    "<label><input type='checkbox' value='bitcoin' checked>BTC</label>"
+    "<label><input type='checkbox' value='ethereum' checked>ETH</label>"
+    "<label><input type='checkbox' value='paxg' checked>PAXG</label>"
+    "<label><input type='checkbox' value='chainbase' checked>Chainbase</label>"
+    "<label><input type='checkbox' value='sui' checked>SUI</label>"
+    "<label><input type='checkbox' value='doge'>DOGE</label>"
+    "<label><input type='checkbox' value='solana'>SOL</label>"
+    "<label><input type='checkbox' value='tron'>TRX</label>"
+    "<label><input type='checkbox' value='usdc'>USDC</label>"
+    "<label><input type='checkbox' value='usdt'>USDT</label>"
+    "</div><p id='te'></p>"
     "<button onclick='go()'>Save</button>"
     "<div id='msg'></div>"
     "</div><script>"
@@ -194,12 +213,16 @@ static const char PROV_HTML[] =
     "document.getElementById('st').textContent='Select your network:';"
     "}).catch(()=>{document.getElementById('st').textContent='Scan failed, retrying...';setTimeout(scan,2000)})}"
     "function go(){"
+    "var cb=document.querySelectorAll('.tg input:checked');"
+    "if(cb.length<4||cb.length>6){document.getElementById('te').textContent='Please select 4-6 tokens';return}"
+    "document.getElementById('te').textContent='';"
+    "var tk=Array.from(cb).map(e=>e.value).join(',');"
     "let ssid=document.getElementById('ss').value;"
     "let pass=document.getElementById('pw').value;"
     "let t=document.getElementById('tz').value;"
     "document.getElementById('msg').innerHTML='<p class=\"s\">Saving... Rebooting...</p>';"
     "fetch('/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
-    "body:'ssid='+encodeURIComponent(ssid)+'&pass='+encodeURIComponent(pass)+'&tz='+encodeURIComponent(t)})}"
+    "body:'ssid='+encodeURIComponent(ssid)+'&pass='+encodeURIComponent(pass)+'&tz='+encodeURIComponent(t)+'&tokens='+encodeURIComponent(tk)})}"
     "scan();"
     "</script></body></html>";
 
@@ -272,7 +295,7 @@ static esp_err_t handle_scan(httpd_req_t *req)
 
 static esp_err_t handle_connect(httpd_req_t *req)
 {
-    char body[256] = {0};
+    char body[384] = {0};
     int len = httpd_req_recv(req, body, sizeof(body) - 1);
     if (len <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
@@ -280,8 +303,8 @@ static esp_err_t handle_connect(httpd_req_t *req)
     }
     body[len] = '\0';
 
-    // Parse URL-encoded: ssid=xxx&pass=yyy&tz=zzz
-    char ssid[33] = {0}, pass[65] = {0}, tz[64] = {0};
+    // Parse URL-encoded: ssid=xxx&pass=yyy&tz=zzz&tokens=aaa,bbb,...
+    char ssid[33] = {0}, pass[65] = {0}, tz[64] = {0}, tokens[128] = {0};
 
     // Simple URL-decode parser
     char *p = strstr(body, "ssid=");
@@ -339,6 +362,24 @@ static esp_err_t handle_connect(httpd_req_t *req)
         tz[j] = '\0';
     }
 
+    p = strstr(body, "tokens=");
+    if (p) {
+        p += 7;
+        char *end = strchr(p, '&');
+        int slen = end ? (end - p) : (int)strlen(p);
+        if (slen > 127) slen = 127;
+        int j = 0;
+        for (int i = 0; i < slen && j < 127; i++) {
+            if (p[i] == '+') { tokens[j++] = ' '; }
+            else if (p[i] == '%' && i + 2 < slen) {
+                char hex[3] = { p[i+1], p[i+2], 0 };
+                tokens[j++] = (char)strtol(hex, NULL, 16);
+                i += 2;
+            } else { tokens[j++] = p[i]; }
+        }
+        tokens[j] = '\0';
+    }
+
     if (ssid[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing SSID");
         return ESP_FAIL;
@@ -346,6 +387,11 @@ static esp_err_t handle_connect(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Received credentials for SSID: %s, TZ: %s", ssid, tz);
     nvs_save_creds(ssid, pass, tz);
+
+    if (tokens[0]) {
+        token_config_save(tokens);
+        ESP_LOGI(TAG, "Token selection saved: %s", tokens);
+    }
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_sendstr(req, "<html><body style='background:#0F0F1A;color:#00E676;"

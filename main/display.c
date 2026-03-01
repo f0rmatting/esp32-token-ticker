@@ -190,3 +190,13 @@ esp_err_t display_init(void)
     ESP_LOGI(TAG, "Display initialized successfully (%dx%d)", LCD_H_RES, LCD_V_RES);
     return ESP_OK;
 }
+
+// ── Backlight control ─────────────────────────────────────────────
+
+void display_set_backlight(int brightness)
+{
+    if (brightness < 0) brightness = 0;
+    if (brightness > 255) brightness = 255;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, brightness);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}

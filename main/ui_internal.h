@@ -6,6 +6,7 @@
 #pragma once
 
 #include "board_config.h"
+#include "token_config.h"
 #include "lvgl.h"
 
 #include <stdbool.h>
@@ -32,12 +33,11 @@
 #define CHART_POINTS      48
 #define CHART_INTERVAL_MS (30 * 60 * 1000)   // 30 min between chart samples
 
-#define CRYPTO_COUNT 4
-
 // ── Crypto data ────────────────────────────────────────────────────
 typedef struct {
     const char *symbol;
     const char *name;
+    const char *pair;                     // Gate.io trading pair (NULL = skip)
     const lv_image_dsc_t *logo;
     double      price;
     double      change_pct;
@@ -47,7 +47,7 @@ typedef struct {
 } crypto_item_t;
 
 // ── Shared state (defined in ui.c) ─────────────────────────────────
-extern crypto_item_t g_crypto[];
+extern crypto_item_t g_crypto[MAX_TOKENS];
 extern int  s_focus_idx;
 extern bool s_animating;
 extern bool s_show_info;

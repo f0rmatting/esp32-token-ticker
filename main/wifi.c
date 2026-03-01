@@ -22,7 +22,7 @@ static const char *TAG = "wifi";
 
 #define WIFI_CONNECTED_BIT  BIT0
 #define WIFI_FAIL_BIT       BIT1
-#define WIFI_BOOT_RETRY     5     // fast retries during initial connect
+#define WIFI_BOOT_RETRY     3     // fast retries during initial connect
 #define WIFI_RECONNECT_MS   10000 // backoff for background reconnects
 
 static EventGroupHandle_t s_wifi_event_group;
@@ -34,7 +34,15 @@ static void reconnect_timer_cb(TimerHandle_t timer)
 {
     (void)timer;
     ESP_LOGI(TAG, "Attempting reconnect...");
-    esp_wifi_connect();
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        // connect() failed synchronously — schedule another attempt
+        ESP_LOGW(TAG, "Reconnect call failed (%s), retrying in %ds",
+                 esp_err_to_name(err), WIFI_RECONNECT_MS / 1000);
+        xTimerStart(timer, 0);
+    }
+    // If connect() succeeded (async), a DISCONNECTED or GOT_IP event
+    // will follow. On DISCONNECTED the timer is restarted by event_handler.
 }
 
 static TimerHandle_t s_reconnect_timer;
@@ -124,11 +132,11 @@ esp_err_t wifi_init_sta(void)
 
     ESP_LOGI(TAG, "Connecting to %s ...", nvs_ssid);
 
-    // Wait for connection or failure (10s timeout)
+    // Wait for connection or failure (6s timeout)
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdFALSE, pdFALSE,
-                                           pdMS_TO_TICKS(10000));
+                                           pdMS_TO_TICKS(6000));
 
     if (bits & WIFI_CONNECTED_BIT) {
         return ESP_OK;

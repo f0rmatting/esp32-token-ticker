@@ -10,6 +10,7 @@
 LV_FONT_DECLARE(font_mono_10)
 LV_FONT_DECLARE(font_mono_12)
 LV_FONT_DECLARE(font_mono_14)
+LV_FONT_DECLARE(font_mono_18)
 
 #include "driver/temperature_sensor.h"
 #include "esp_system.h"
@@ -36,8 +37,7 @@ static lv_obj_t *s_info_temp_arc;
 static lv_obj_t *s_info_temp_lbl;
 static lv_obj_t *s_info_heap_arc;
 static lv_obj_t *s_info_heap_lbl;
-static lv_obj_t *s_info_ssid;
-static lv_obj_t *s_info_rssi;
+static lv_obj_t *s_info_ip;
 static lv_obj_t *s_rssi_bars[4];
 static lv_obj_t *s_info_mode;
 static lv_obj_t *s_info_setup;
@@ -75,7 +75,7 @@ void create_info_panel(lv_obj_t *parent)
     lv_obj_clear_flag(s_info_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     // ── Time card (top, wide) ──────────────────────────────────────
-    #define TIME_CARD_H 28
+    #define TIME_CARD_H 34
     lv_color_t cyan = lv_color_hex(0x00BCD4);
     lv_obj_t *time_card = info_card(s_info_panel,
         MARGIN_H, MARGIN_TOP, CONTENT_W, TIME_CARD_H, cyan);
@@ -83,7 +83,7 @@ void create_info_panel(lv_obj_t *parent)
     s_info_time = lv_label_create(time_card);
     lv_label_set_text(s_info_time, "--:--:--");
     lv_obj_set_style_text_color(s_info_time, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_time, &font_mono_12, 0);
+    lv_obj_set_style_text_font(s_info_time, &font_mono_18, 0);
     lv_obj_align(s_info_time, LV_ALIGN_CENTER, 0, 0);
 
     // ── System card (bottom-left): temp arc + heap arc ──────────────
@@ -175,25 +175,17 @@ void create_info_panel(lv_obj_t *parent)
     lv_obj_set_style_text_font(net_title, &font_mono_10, 0);
     lv_obj_align(net_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_info_ssid = lv_label_create(net_card);
-    lv_label_set_text(s_info_ssid, "");
-    lv_obj_set_style_text_color(s_info_ssid, lv_color_hex(0xA0A0A0), 0);
-    lv_obj_set_style_text_font(s_info_ssid, &font_mono_10, 0);
-    lv_obj_align(s_info_ssid, LV_ALIGN_TOP_RIGHT, 0, 0);
-
-    s_info_mode = lv_label_create(net_card);
-    lv_label_set_text(s_info_mode, "");
-    lv_obj_set_style_text_color(s_info_mode, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_info_mode, &font_mono_12, 0);
-    lv_obj_align(s_info_mode, LV_ALIGN_TOP_LEFT, 0, 22);
-
-    // ── Signal strength bars (4 ascending bars) ───────────────────
-    int bar_y = 46;
-    static const int bar_h[] = {5, 9, 13, 17};
+    // ── Signal strength bars (top-right, 4 ascending bars) ─────────
+    static const int bar_h[] = {3, 6, 9, 12};
+    int bar_max = 12;
+    int bar_w = 3;
+    int bar_gap = 5;
+    int bars_total_w = 4 * bar_w + 3 * (bar_gap - bar_w);  // 18px
+    int bar_x0 = half_w - 18 - bars_total_w;  // right-align with margin
     for (int i = 0; i < 4; i++) {
         s_rssi_bars[i] = lv_obj_create(net_card);
-        lv_obj_set_size(s_rssi_bars[i], 5, bar_h[i]);
-        lv_obj_set_pos(s_rssi_bars[i], i * 7, bar_y + 17 - bar_h[i]);
+        lv_obj_set_size(s_rssi_bars[i], bar_w, bar_h[i]);
+        lv_obj_set_pos(s_rssi_bars[i], bar_x0 + i * bar_gap, bar_max - bar_h[i]);
         lv_obj_set_style_bg_color(s_rssi_bars[i], lv_color_hex(0x2A2A2A), 0);
         lv_obj_set_style_bg_opa(s_rssi_bars[i], LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(s_rssi_bars[i], 0, 0);
@@ -202,11 +194,18 @@ void create_info_panel(lv_obj_t *parent)
         lv_obj_clear_flag(s_rssi_bars[i], LV_OBJ_FLAG_SCROLLABLE);
     }
 
-    s_info_rssi = lv_label_create(net_card);
-    lv_label_set_text(s_info_rssi, "");
-    lv_obj_set_style_text_color(s_info_rssi, lv_color_hex(0xA0A0A0), 0);
-    lv_obj_set_style_text_font(s_info_rssi, &font_mono_12, 0);
-    lv_obj_set_pos(s_info_rssi, 32, bar_y);
+    s_info_ip = lv_label_create(net_card);
+    lv_label_set_text(s_info_ip, "");
+    lv_obj_set_style_text_color(s_info_ip, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_info_ip, &font_mono_14, 0);
+    lv_obj_align(s_info_ip, LV_ALIGN_TOP_MID, 0, 24);
+
+    s_info_mode = lv_label_create(net_card);
+    lv_label_set_text(s_info_mode, "");
+    lv_obj_set_style_text_color(s_info_mode, lv_color_hex(0xA0A0A0), 0);
+    lv_obj_set_style_text_font(s_info_mode, &font_mono_12, 0);
+    lv_obj_align(s_info_mode, LV_ALIGN_TOP_MID, 0, 44);
+
 
     // ── HomeKit status ─────────────────────────────────────────────
     s_info_setup = lv_label_create(net_card);
@@ -271,13 +270,9 @@ void toggle_info_panel(void)
 
     if (s_show_info) {
         // Refresh network info on show
-        char buf[48];
-        lv_label_set_text(s_info_ssid, wifi_get_ssid());
+        lv_label_set_text(s_info_ip, wifi_get_ip_str());
 
-        int rssi = wifi_get_rssi();
-        snprintf(buf, sizeof(buf), "%d dBm", rssi);
-        lv_label_set_text(s_info_rssi, buf);
-        update_rssi_bars(rssi);
+        update_rssi_bars(wifi_get_rssi());
 
         // Wi-Fi channel + protocol
         {
@@ -301,11 +296,8 @@ void toggle_info_panel(void)
         }
 
         // HomeKit status
-        int paired = homekit_get_paired_count();
-        if (paired > 0) {
-            char hk_buf[32];
-            snprintf(hk_buf, sizeof(hk_buf), "HomeKit Paired (%d)", paired);
-            lv_label_set_text(s_info_setup, hk_buf);
+        if (homekit_get_paired_count() > 0) {
+            lv_label_set_text(s_info_setup, "HomeKit Paired");
         } else {
             char hk_buf[32];
             snprintf(hk_buf, sizeof(hk_buf), "SETUP %s", homekit_get_setup_code());
@@ -398,7 +390,6 @@ void info_update_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         char time_buf[12] = "";
-        char rssi_buf[16] = "";
 
         // Time
         time_t now;
@@ -456,9 +447,6 @@ void info_update_task(void *arg)
 
         // RSSI
         int rssi = wifi_get_rssi();
-        if (rssi != 0) {
-            snprintf(rssi_buf, sizeof(rssi_buf), "%d dBm", rssi);
-        }
 
         if (lvgl_port_lock(100)) {
             if (time_buf[0]) lv_label_set_text(s_info_time, time_buf);
@@ -470,14 +458,10 @@ void info_update_task(void *arg)
             lv_arc_set_value(s_info_heap_arc, used_pct);
             lv_obj_set_style_arc_color(s_info_heap_arc, heap_color, LV_PART_INDICATOR);
             lv_label_set_text(s_info_heap_lbl, heap_txt);
-            if (rssi_buf[0]) lv_label_set_text(s_info_rssi, rssi_buf);
             update_rssi_bars(rssi);
             // HomeKit status
-            int paired = homekit_get_paired_count();
-            if (paired > 0) {
-                char hk_buf[32];
-                snprintf(hk_buf, sizeof(hk_buf), "HomeKit Paired (%d)", paired);
-                lv_label_set_text(s_info_setup, hk_buf);
+            if (homekit_get_paired_count() > 0) {
+                lv_label_set_text(s_info_setup, "HomeKit Paired");
             } else {
                 char hk_buf[32];
                 snprintf(hk_buf, sizeof(hk_buf), "SETUP %s", homekit_get_setup_code());
@@ -508,8 +492,7 @@ void ui_info_cleanup(void)
     s_info_temp_lbl = NULL;
     s_info_heap_arc = NULL;
     s_info_heap_lbl = NULL;
-    s_info_ssid = NULL;
-    s_info_rssi = NULL;
+    s_info_ip = NULL;
     for (int i = 0; i < 4; i++) s_rssi_bars[i] = NULL;
     s_info_mode = NULL;
     s_info_setup = NULL;

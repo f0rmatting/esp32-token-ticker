@@ -58,24 +58,48 @@ static void btn_task(void *arg)
                 continue;
             }
 
-            // Button was released before 3s — check double click
+            // Button was released before 3s — count clicks
             // Clear any interrupt that fired during long-press polling
+            int clicks = 1;
             s_btn_pressed = false;
-            vTaskDelay(pdMS_TO_TICKS(300));
+
+            // Wait for possible 2nd click
+            vTaskDelay(pdMS_TO_TICKS(250));
             if (s_btn_pressed) {
-                // Double click -> toggle info panel
+                clicks = 2;
                 s_btn_pressed = false;
+                // Wait for possible 3rd click
+                vTaskDelay(pdMS_TO_TICKS(250));
+                if (s_btn_pressed) {
+                    clicks = 3;
+                    s_btn_pressed = false;
+                }
+            }
+
+            if (clicks == 3) {
+                // Triple click -> toggle info panel
                 if (lvgl_port_lock(100)) {
                     toggle_info_panel();
                     lvgl_port_unlock();
                 }
+            } else if (clicks == 2) {
+                if (s_show_info) {
+                    // Info: HomeKit double press
+                    homekit_send_switch_double_press();
+                } else {
+                    // Crypto view: switch coin
+                    if (lvgl_port_lock(100)) {
+                        switch_focus();
+                        lvgl_port_unlock();
+                    }
+                }
             } else {
                 // Single click
                 if (s_show_info) {
-                    // Info panel: send HomeKit switch event to Apple Home
+                    // Info: HomeKit single press
                     homekit_send_switch_press();
                 } else {
-                    // Crypto view: switch focused coin
+                    // Crypto view: switch coin
                     if (lvgl_port_lock(100)) {
                         switch_focus();
                         lvgl_port_unlock();
@@ -102,5 +126,5 @@ void btn_init(void)
     }
     gpio_isr_handler_add(BTN_BOOT_GPIO, btn_isr_handler, NULL);
     ESP_LOGI(TAG, "BOOT button on GPIO%d", BTN_BOOT_GPIO);
-    xTaskCreate(btn_task, "btn", 2048, NULL, 5, NULL);
+    xTaskCreate(btn_task, "btn", 2048, NULL, 3, NULL);
 }
