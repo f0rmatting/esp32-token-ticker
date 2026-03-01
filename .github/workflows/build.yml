@@ -20,7 +20,9 @@ jobs:
           submodules: recursive
 
       - name: Build for ${{ matrix.target }}
+        shell: bash
         run: |
+          . $IDF_PATH/export.sh
           idf.py set-target ${{ matrix.target }}
           idf.py build
 
